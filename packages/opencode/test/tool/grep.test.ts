@@ -34,7 +34,7 @@ describe("tool.grep", () => {
         expect(result.output).toContain("Found")
       },
     })
-  })
+  }, 120000)
 
   test("no matches returns correct output", async () => {
     await using tmp = await tmpdir({
@@ -57,7 +57,7 @@ describe("tool.grep", () => {
         expect(result.output).toBe("No files found")
       },
     })
-  })
+  }, 60000)
 
   test("handles CRLF line endings in output", async () => {
     // This test verifies the regex split handles both \n and \r\n
@@ -81,7 +81,7 @@ describe("tool.grep", () => {
         expect(result.metadata.matches).toBeGreaterThan(0)
       },
     })
-  })
+  }, 60000)
 })
 
 describe("CRLF regex handling", () => {

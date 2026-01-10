@@ -31,6 +31,60 @@ test("provider loaded from env variable", async () => {
   })
 })
 
+test("owiseman loads models from /api/v1/ollama/models", async () => {
+  const originalFetch = globalThis.fetch
+  let sawModelsRequest = false
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url ?? String(input)
+
+    if (url === "https://www.owiseman.com/api/v1/ollama/models") {
+      sawModelsRequest = true
+      const headers = new Headers(init?.headers)
+      expect(headers.get("api-key")).toBe("test-api-key")
+      return new Response(
+        JSON.stringify({
+          models: [{ name: "llama3:8b" }, { model: "qwen2.5:7b" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`)
+  }) as any
+
+  try {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("OWISEMAN_API_KEY", "test-api-key")
+      },
+      fn: async () => {
+        const providers = await Provider.list()
+        expect(providers["owiseman"]).toBeDefined()
+        expect(Object.keys(providers["owiseman"].models)).toContain("llama3:8b")
+        expect(Object.keys(providers["owiseman"].models)).toContain("qwen2.5:7b")
+      },
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  expect(sawModelsRequest).toBe(true)
+})
+
 test("provider loaded from config with apiKey option", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

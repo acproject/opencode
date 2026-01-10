@@ -29,7 +29,10 @@ export function createDialogProviderOptions() {
   const options = createMemo(() => {
     return pipe(
       sync.data.provider_next.all,
-      sortBy((x) => PROVIDER_PRIORITY[x.id] ?? 99),
+      sortBy(
+        (x) => PROVIDER_PRIORITY[x.id] ?? 99,
+        (x) => x.name,
+      ),
       map((provider) => ({
         title: provider.name,
         value: provider.id,

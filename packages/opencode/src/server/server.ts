@@ -33,6 +33,7 @@ import { ToolRegistry } from "../tool/registry"
 import { zodToJsonSchema } from "zod-to-json-schema"
 import { SessionPrompt } from "../session/prompt"
 import { SessionCompaction } from "../session/compaction"
+import { Env } from "../env"
 import { SessionRevert } from "../session/revert"
 import { lazy } from "../util/lazy"
 import { Todo } from "../session/todo"
@@ -75,7 +76,7 @@ export namespace Server {
   export const App: () => Hono = lazy(
     () =>
       // TODO: Break server.ts into smaller route files to fix type inference
-      app
+      (app as unknown as Hono<any, any, any>)
         .onError((err, c) => {
           log.error("failed", {
             error: err,
@@ -279,6 +280,205 @@ export namespace Server {
         .use(validator("query", z.object({ directory: z.string().optional() })))
 
         .route("/project", ProjectRoute)
+
+        .get(
+          "/api/v1/ollama/models",
+          describeRoute({
+            summary: "List Ollama models (owiseman passthrough)",
+            description: "Proxy request to owiseman Ollama models endpoint.",
+            operationId: "ollama.models",
+            responses: {
+              200: {
+                description: "Ollama models response",
+                content: {
+                  "application/json": {
+                    schema: resolver(z.any()),
+                  },
+                },
+              },
+            },
+          }),
+          async (c) => {
+            const cfg = await Config.get()
+            const baseURL =
+              cfg.provider?.["owiseman"]?.options?.baseURL ??
+              cfg.provider?.["owiseman"]?.options?.api ??
+              Env.get("OWISEMAN_BASE_URL") ??
+              "https://www.owiseman.com"
+            const auth = await Auth.get("owiseman")
+            const apiKey =
+              c.req.header("api-key") ??
+              cfg.provider?.["owiseman"]?.options?.apiKey ??
+              Env.get("OWISEMAN_API_KEY") ??
+              (auth?.type === "api" ? auth.key : undefined)
+
+            const url = new URL("/api/v1/ollama/models", baseURL).toString()
+            const response = await fetch(url, {
+              method: "GET",
+              headers: {
+                ...(apiKey ? { "api-key": apiKey } : {}),
+                "User-Agent": Installation.USER_AGENT,
+              },
+            })
+            const text = await response.text()
+            return new Response(text, {
+              status: response.status,
+              headers: {
+                "Content-Type": response.headers.get("content-type") ?? "application/json",
+              },
+            })
+          },
+        )
+        .post(
+          "/api/v1/ollama/chat",
+          describeRoute({
+            summary: "Ollama chat (owiseman passthrough)",
+            description: "Proxy request to owiseman Ollama chat endpoint.",
+            operationId: "ollama.chat",
+            responses: {
+              200: {
+                description: "Ollama chat response",
+                content: {
+                  "application/json": { schema: resolver(z.any()) },
+                  "application/x-ndjson": { schema: resolver(z.any()) },
+                },
+              },
+            },
+          }),
+          validator("json", z.record(z.string(), z.any())),
+          async (c) => {
+            const body = c.req.valid("json")
+
+            const cfg = await Config.get()
+            const baseURL =
+              cfg.provider?.["owiseman"]?.options?.baseURL ??
+              cfg.provider?.["owiseman"]?.options?.api ??
+              Env.get("OWISEMAN_BASE_URL") ??
+              "https://www.owiseman.com"
+            const auth = await Auth.get("owiseman")
+            const requestApiKey = typeof body["api-key"] === "string" ? body["api-key"] : undefined
+            const apiKey =
+              requestApiKey ??
+              c.req.header("api-key") ??
+              cfg.provider?.["owiseman"]?.options?.apiKey ??
+              Env.get("OWISEMAN_API_KEY") ??
+              (auth?.type === "api" ? auth.key : undefined)
+
+            if (!apiKey) {
+              return c.json({ error: "Missing owiseman api key" }, 401)
+            }
+
+            const streamEnabled = body["stream"] !== false
+            const payload = {
+              ...body,
+              "api-key": apiKey,
+              model: (body["model"] as string | undefined) ?? "nemotron-3-nano:30b",
+              ...(streamEnabled ? {} : { stream: false }),
+            }
+
+            const url = new URL("/api/v1/ollama/chat", baseURL).toString()
+            const response = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "User-Agent": Installation.USER_AGENT,
+              },
+              body: JSON.stringify(payload),
+            })
+
+            if (streamEnabled) {
+              return new Response(response.body, {
+                status: response.status,
+                headers: {
+                  "Content-Type": "application/x-ndjson",
+                },
+              })
+            }
+
+            const text = await response.text()
+            return new Response(text, {
+              status: response.status,
+              headers: {
+                "Content-Type": response.headers.get("content-type") ?? "application/json",
+              },
+            })
+          },
+        )
+        .post(
+          "/api/v1/ollama/generate",
+          describeRoute({
+            summary: "Ollama generate (owiseman passthrough)",
+            description: "Proxy request to owiseman Ollama generate endpoint.",
+            operationId: "ollama.generate",
+            responses: {
+              200: {
+                description: "Ollama generate response",
+                content: {
+                  "application/json": { schema: resolver(z.any()) },
+                  "application/x-ndjson": { schema: resolver(z.any()) },
+                },
+              },
+            },
+          }),
+          validator("json", z.record(z.string(), z.any())),
+          async (c) => {
+            const body = c.req.valid("json")
+
+            const cfg = await Config.get()
+            const baseURL =
+              cfg.provider?.["owiseman"]?.options?.baseURL ??
+              cfg.provider?.["owiseman"]?.options?.api ??
+              Env.get("OWISEMAN_BASE_URL") ??
+              "https://www.owiseman.com"
+            const auth = await Auth.get("owiseman")
+            const requestApiKey = typeof body["api-key"] === "string" ? body["api-key"] : undefined
+            const apiKey =
+              requestApiKey ??
+              c.req.header("api-key") ??
+              cfg.provider?.["owiseman"]?.options?.apiKey ??
+              Env.get("OWISEMAN_API_KEY") ??
+              (auth?.type === "api" ? auth.key : undefined)
+
+            if (!apiKey) {
+              return c.json({ error: "Missing owiseman api key" }, 401)
+            }
+
+            const streamEnabled = body["stream"] !== false
+            const payload = {
+              ...body,
+              "api-key": apiKey,
+              model: (body["model"] as string | undefined) ?? "nemotron-3-nano:30b",
+              ...(streamEnabled ? {} : { stream: false }),
+            }
+
+            const url = new URL("/api/v1/ollama/generate", baseURL).toString()
+            const response = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "User-Agent": Installation.USER_AGENT,
+              },
+              body: JSON.stringify(payload),
+            })
+
+            if (streamEnabled) {
+              return new Response(response.body, {
+                status: response.status,
+                headers: {
+                  "Content-Type": "application/x-ndjson",
+                },
+              })
+            }
+
+            const text = await response.text()
+            return new Response(text, {
+              status: response.status,
+              headers: {
+                "Content-Type": response.headers.get("content-type") ?? "application/json",
+              },
+            })
+          },
+        )
 
         .get(
           "/pty",
@@ -1785,10 +1985,49 @@ export namespace Server {
             }
 
             const connected = await Provider.list()
-            const providers = Object.assign(
-              mapValues(filteredProviders, (x) => Provider.fromModelsDevProvider(x)),
-              connected,
-            )
+            const providers = Object.assign(mapValues(filteredProviders, (x) => Provider.fromModelsDevProvider(x)), {
+              ...(enabled && !enabled.has("owiseman") ? {} : disabled.has("owiseman") ? {} : {
+                  owiseman: {
+                    id: "owiseman",
+                    name: "Owiseman",
+                    source: "custom",
+                    env: ["OWISEMAN_API_KEY"],
+                    options: {},
+                    models: {
+                      "nemotron-3-nano:30b": {
+                        id: "nemotron-3-nano:30b",
+                        providerID: "owiseman",
+                        api: {
+                          id: "nemotron-3-nano:30b",
+                          url: "https://www.owiseman.com",
+                          npm: "@ai-sdk/openai-compatible",
+                        },
+                        name: "nemotron-3-nano:30b",
+                        capabilities: {
+                          temperature: true,
+                          reasoning: false,
+                          attachment: false,
+                          toolcall: true,
+                          input: { text: true, audio: false, image: false, video: false, pdf: false },
+                          output: { text: true, audio: false, image: false, video: false, pdf: false },
+                          interleaved: false,
+                        },
+                        cost: {
+                          input: 0,
+                          output: 0,
+                          cache: { read: 0, write: 0 },
+                        },
+                        limit: { context: 128000, output: 4096 },
+                        status: "active",
+                        options: {},
+                        headers: {},
+                        release_date: "2026-01-01",
+                        variants: {},
+                      },
+                    },
+                  } satisfies Provider.Info,
+                }),
+            } satisfies Record<string, Provider.Info>, connected)
             return c.json({
               all: Object.values(providers),
               default: mapValues(providers, (item) => Provider.sort(Object.values(item.models))[0].id),

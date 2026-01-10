@@ -3,6 +3,7 @@ import { useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "./dialog"
 import { onMount, type JSX } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
+import { Clipboard } from "@tui/util/clipboard"
 
 export type DialogPromptProps = {
   title: string
@@ -18,9 +19,20 @@ export function DialogPrompt(props: DialogPromptProps) {
   const { theme } = useTheme()
   let textarea: TextareaRenderable
 
-  useKeyboard((evt) => {
+  useKeyboard(async (evt) => {
     if (evt.name === "return") {
       props.onConfirm?.(textarea.plainText)
+    }
+    if (evt.name === "v" && (evt.ctrl || evt.meta)) {
+      evt.preventDefault()
+      const content = await Clipboard.read()
+      if (content?.mime === "text/plain" && content.data) {
+        textarea.insertText(content.data)
+        setTimeout(() => {
+          textarea.getLayoutNode().markDirty()
+          textarea.gotoBufferEnd()
+        }, 0)
+      }
     }
   })
 

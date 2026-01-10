@@ -13,6 +13,18 @@ import { Env } from "../env"
 import { Instance } from "../project/instance"
 import { Flag } from "../flag/flag"
 import { iife } from "@/util/iife"
+import { Installation } from "@/installation"
+import {
+  APICallError,
+  type LanguageModelV2 as CoreLanguageModelV2,
+  type LanguageModelV2CallWarning,
+  type LanguageModelV2Content,
+  type LanguageModelV2FinishReason,
+  type LanguageModelV2Prompt,
+  type LanguageModelV2StreamPart,
+  type LanguageModelV2Usage,
+  type SharedV2ProviderMetadata,
+} from "@ai-sdk/provider"
 
 // Direct imports for bundled providers
 import { createAmazonBedrock, type AmazonBedrockProviderSettings } from "@ai-sdk/amazon-bedrock"
@@ -438,6 +450,415 @@ export namespace Provider {
         },
       }
     },
+    owiseman: async (input) => {
+      const cfg = await Config.get()
+      const auth = await Auth.get("owiseman")
+
+      const apiKey =
+        cfg.provider?.["owiseman"]?.options?.apiKey ??
+        Env.get("OWISEMAN_API_KEY") ??
+        (auth?.type === "api" ? auth.key : undefined)
+
+      const baseURL =
+        cfg.provider?.["owiseman"]?.options?.baseURL ??
+        cfg.provider?.["owiseman"]?.options?.api ??
+        Env.get("OWISEMAN_BASE_URL") ??
+        "https://www.owiseman.com"
+
+      const templateModel = input.models["nemotron-3-nano:30b"] ?? Object.values(input.models)[0]
+      const templateCapabilities =
+        templateModel?.capabilities ??
+        ({
+          temperature: true,
+          reasoning: false,
+          attachment: false,
+          toolcall: true,
+          input: { text: true, audio: false, image: false, video: false, pdf: false },
+          output: { text: true, audio: false, image: false, video: false, pdf: false },
+          interleaved: false,
+        } as any)
+      const templateLimit = templateModel?.limit ?? ({ context: 128000, output: 4096 } as any)
+      const templateReleaseDate = templateModel?.release_date ?? "2026-01-01"
+
+      function extractModelNames(payload: any): string[] {
+        const list: any =
+          Array.isArray(payload) ? payload : Array.isArray(payload?.models) ? payload.models : Array.isArray(payload?.data) ? payload.data : []
+
+        const out: string[] = []
+        for (const item of list) {
+          if (typeof item === "string") {
+            out.push(item)
+            continue
+          }
+          const name =
+            (typeof item?.name === "string" ? item.name : undefined) ??
+            (typeof item?.model === "string" ? item.model : undefined) ??
+            (typeof item?.id === "string" ? item.id : undefined)
+          if (name) out.push(name)
+        }
+        return Array.from(new Set(out)).filter(Boolean)
+      }
+
+      if (apiKey) {
+        const discovered = await (async () => {
+          try {
+            const url = new URL("/api/v1/ollama/models", baseURL).toString()
+            const response = await fetch(url, {
+              method: "GET",
+              headers: {
+                "api-key": apiKey,
+                "User-Agent": Installation.USER_AGENT,
+              },
+              signal: AbortSignal.timeout(5000),
+            })
+            const raw = await response.text()
+            if (!response.ok) return []
+            let parsed: any
+            try {
+              parsed = JSON.parse(raw)
+            } catch {
+              parsed = undefined
+            }
+            return extractModelNames(parsed)
+          } catch {
+            return []
+          }
+        })()
+
+        for (const modelID of discovered) {
+          if (input.models[modelID]) continue
+          input.models[modelID] = {
+            id: modelID,
+            providerID: input.id,
+            api: {
+              id: modelID,
+              url: baseURL,
+              npm: "@ai-sdk/openai-compatible",
+            },
+            name: modelID,
+            family: "ollama",
+            capabilities: templateCapabilities,
+            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+            limit: templateLimit,
+            status: "active",
+            options: {},
+            headers: {},
+            release_date: templateReleaseDate,
+            variants: {},
+          }
+        }
+      }
+
+      function headersToRecord(headers: Headers): Record<string, string> {
+        const out: Record<string, string> = {}
+        headers.forEach((value, key) => {
+          out[key] = value
+        })
+        return out
+      }
+
+      class OwisemanOllamaChatModel implements CoreLanguageModelV2 {
+        readonly specificationVersion = "v2"
+        readonly modelId: string
+        readonly supportedUrls: Record<string, RegExp[]> = {}
+        private readonly cfg: { baseURL: string; apiKey?: string }
+
+        constructor(modelId: string, cfg: { baseURL: string; apiKey?: string }) {
+          this.modelId = modelId
+          this.cfg = cfg
+        }
+
+        get provider(): string {
+          return "owiseman.ollama"
+        }
+
+        private toOllamaMessages(prompt: LanguageModelV2Prompt) {
+          return prompt.map((msg) => {
+            const content =
+              typeof msg.content === "string"
+                ? msg.content
+                : msg.content
+                    .map((part: any) => {
+                      if (part?.type === "text") return String(part.text ?? "")
+                      return ""
+                    })
+                    .join("")
+            const role =
+              msg.role === "system" || msg.role === "user" || msg.role === "assistant" || msg.role === "tool"
+                ? msg.role
+                : "user"
+            return {
+              role,
+              content,
+            }
+          })
+        }
+
+        private async callOllama({
+          stream,
+          prompt,
+          headers,
+          abortSignal,
+        }: {
+          stream: boolean
+          prompt: LanguageModelV2Prompt
+          headers?: Record<string, string | undefined>
+          abortSignal?: AbortSignal
+        }) {
+          const mergedHeaders = new Headers()
+          for (const [k, v] of Object.entries(headers ?? {})) {
+            if (v == null) continue
+            mergedHeaders.set(k, v)
+          }
+          mergedHeaders.set("Content-Type", "application/json")
+          mergedHeaders.set("User-Agent", Installation.USER_AGENT)
+
+          const body = {
+            "api-key": this.cfg.apiKey,
+            model: this.modelId || "nemotron-3-nano:30b",
+            messages: this.toOllamaMessages(prompt),
+            stream,
+          }
+
+          const url = new URL("/api/v1/ollama/chat", this.cfg.baseURL).toString()
+          const response = await fetch(url, {
+            method: "POST",
+            headers: mergedHeaders,
+            body: JSON.stringify(body),
+            signal: abortSignal,
+          })
+          return { response, body }
+        }
+
+        async doGenerate(
+          options: Parameters<CoreLanguageModelV2["doGenerate"]>[0],
+        ): Promise<Awaited<ReturnType<CoreLanguageModelV2["doGenerate"]>>> {
+          const warnings: LanguageModelV2CallWarning[] = []
+
+          if (!this.cfg.apiKey) {
+            throw new APICallError({
+              message: "Missing owiseman api key",
+              url: new URL("/api/v1/ollama/chat", this.cfg.baseURL).toString(),
+              requestBodyValues: {},
+              statusCode: 401,
+              isRetryable: false,
+            })
+          }
+
+          const { response, body } = await this.callOllama({
+            stream: false,
+            prompt: options.prompt,
+            headers: options.headers,
+            abortSignal: options.abortSignal,
+          })
+
+          const rawText = await response.text()
+          if (!response.ok) {
+            throw new APICallError({
+              message: `Owiseman request failed (${response.status})`,
+              url: response.url,
+              requestBodyValues: body,
+              statusCode: response.status,
+              responseHeaders: headersToRecord(response.headers),
+              responseBody: rawText,
+              isRetryable: response.status >= 500,
+            })
+          }
+
+          let parsed: any
+          try {
+            parsed = JSON.parse(rawText)
+          } catch {
+            parsed = undefined
+          }
+
+          const text: string =
+            (parsed?.message && typeof parsed.message.content === "string" ? parsed.message.content : undefined) ??
+            (typeof parsed?.response === "string" ? parsed.response : "") ??
+            ""
+
+          const content: LanguageModelV2Content[] = [{ type: "text", text }]
+
+          const inputTokens: number | undefined =
+            typeof parsed?.prompt_eval_count === "number" ? parsed.prompt_eval_count : undefined
+          const outputTokens: number | undefined = typeof parsed?.eval_count === "number" ? parsed.eval_count : undefined
+
+          const usage: LanguageModelV2Usage = {
+            inputTokens,
+            outputTokens,
+            totalTokens:
+              typeof inputTokens === "number" && typeof outputTokens === "number" ? inputTokens + outputTokens : undefined,
+          }
+
+          const finishReason: LanguageModelV2FinishReason = "stop"
+
+          return {
+            content,
+            finishReason,
+            usage,
+            request: { body },
+            response: {
+              id: typeof parsed?.id === "string" ? parsed.id : undefined,
+              timestamp: new Date(typeof parsed?.created_at === "string" ? parsed.created_at : Date.now()),
+              modelId: typeof parsed?.model === "string" ? parsed.model : this.modelId,
+              headers: headersToRecord(response.headers),
+              body: rawText,
+            },
+            providerMetadata: {} satisfies SharedV2ProviderMetadata,
+            warnings,
+          }
+        }
+
+        async doStream(
+          options: Parameters<CoreLanguageModelV2["doStream"]>[0],
+        ): Promise<Awaited<ReturnType<CoreLanguageModelV2["doStream"]>>> {
+          const warnings: LanguageModelV2CallWarning[] = []
+
+          if (!this.cfg.apiKey) {
+            throw new APICallError({
+              message: "Missing owiseman api key",
+              url: new URL("/api/v1/ollama/chat", this.cfg.baseURL).toString(),
+              requestBodyValues: {},
+              statusCode: 401,
+              isRetryable: false,
+            })
+          }
+
+          const { response, body } = await this.callOllama({
+            stream: true,
+            prompt: options.prompt,
+            headers: options.headers,
+            abortSignal: options.abortSignal,
+          })
+
+          if (!response.ok) {
+            const rawText = await response.text().catch(() => "")
+            throw new APICallError({
+              message: `Owiseman request failed (${response.status})`,
+              url: response.url,
+              requestBodyValues: body,
+              statusCode: response.status,
+              responseHeaders: headersToRecord(response.headers),
+              responseBody: rawText,
+              isRetryable: response.status >= 500,
+            })
+          }
+
+          let currentTextId: string | null = null
+          let finishReason: LanguageModelV2FinishReason = "unknown"
+          const usage: LanguageModelV2Usage = { inputTokens: undefined, outputTokens: undefined, totalTokens: undefined }
+
+          const stream = new ReadableStream<LanguageModelV2StreamPart>({
+            async start(controller) {
+              controller.enqueue({ type: "stream-start", warnings })
+
+              const reader = response.body?.getReader()
+              if (!reader) {
+                finishReason = "error"
+                controller.enqueue({
+                  type: "finish",
+                  finishReason,
+                  usage,
+                  providerMetadata: {} satisfies SharedV2ProviderMetadata,
+                })
+                controller.close()
+                return
+              }
+
+              const decoder = new TextDecoder()
+              let buffer = ""
+              let isDone = false
+
+              while (true) {
+                const { value, done } = await reader.read()
+                if (done) break
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split("\n")
+                buffer = lines.pop() ?? ""
+
+                for (const line of lines) {
+                  const trimmed = line.trim()
+                  if (!trimmed) continue
+                  if (options.includeRawChunks) controller.enqueue({ type: "raw", rawValue: trimmed })
+
+                  let chunk: any
+                  try {
+                    chunk = JSON.parse(trimmed)
+                  } catch (e) {
+                    finishReason = "error"
+                    controller.enqueue({ type: "error", error: e })
+                    continue
+                  }
+
+                  const delta: string | undefined =
+                    (chunk?.message && typeof chunk.message.content === "string" ? chunk.message.content : undefined) ??
+                    (typeof chunk?.response === "string" ? chunk.response : undefined)
+
+                  if (delta) {
+                    if (!currentTextId) {
+                      currentTextId = "owiseman-text"
+                      controller.enqueue({ type: "text-start", id: currentTextId, providerMetadata: {} })
+                    }
+                    controller.enqueue({ type: "text-delta", id: currentTextId, delta })
+                  }
+
+                  if (chunk?.done === true) {
+                    isDone = true
+                    finishReason = "stop"
+                    const inTok = typeof chunk?.prompt_eval_count === "number" ? chunk.prompt_eval_count : undefined
+                    const outTok = typeof chunk?.eval_count === "number" ? chunk.eval_count : undefined
+                    usage.inputTokens = inTok
+                    usage.outputTokens = outTok
+                    usage.totalTokens =
+                      typeof inTok === "number" && typeof outTok === "number" ? inTok + outTok : undefined
+                    break
+                  }
+                }
+
+                if (isDone) break
+              }
+
+              if (currentTextId) {
+                controller.enqueue({ type: "text-end", id: currentTextId })
+                currentTextId = null
+              }
+
+              controller.enqueue({
+                type: "finish",
+                finishReason,
+                usage,
+                providerMetadata: {} satisfies SharedV2ProviderMetadata,
+              })
+              controller.close()
+            },
+          })
+
+          return {
+            stream,
+            request: { body },
+            response: { headers: headersToRecord(response.headers) },
+          }
+        }
+      }
+
+      return {
+        autoload: Boolean(apiKey),
+        options: {
+          baseURL,
+          owisemanApiKey: apiKey,
+        },
+        async getModel(_sdk: any, modelID: string, options?: Record<string, any>) {
+          const cfgBaseURL = typeof options?.baseURL === "string" ? options.baseURL : baseURL
+          const cfgApiKey =
+            typeof options?.owisemanApiKey === "string"
+              ? options.owisemanApiKey
+              : typeof options?.apiKey === "string"
+                ? options.apiKey
+                : apiKey
+          return new OwisemanOllamaChatModel(modelID, { baseURL: cfgBaseURL, apiKey: cfgApiKey })
+        },
+      }
+    },
   }
 
   export const Model = z
@@ -607,6 +1028,45 @@ export namespace Provider {
     const config = await Config.get()
     const modelsDev = await ModelsDev.get()
     const database = mapValues(modelsDev, fromModelsDevProvider)
+
+    if (!database["owiseman"]) {
+      database["owiseman"] = {
+        id: "owiseman",
+        name: "Owiseman",
+        source: "custom",
+        env: ["OWISEMAN_API_KEY"],
+        options: {},
+        models: {
+          "nemotron-3-nano:30b": {
+            id: "nemotron-3-nano:30b",
+            providerID: "owiseman",
+            api: {
+              id: "nemotron-3-nano:30b",
+              url: "https://www.owiseman.com",
+              npm: "@ai-sdk/openai-compatible",
+            },
+            name: "nemotron-3-nano:30b",
+            family: "ollama",
+            capabilities: {
+              temperature: true,
+              reasoning: false,
+              attachment: false,
+              toolcall: true,
+              input: { text: true, audio: false, image: false, video: false, pdf: false },
+              output: { text: true, audio: false, image: false, video: false, pdf: false },
+              interleaved: false,
+            },
+            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+            limit: { context: 128000, output: 4096 },
+            status: "active",
+            options: {},
+            headers: {},
+            release_date: "2026-01-01",
+            variants: {},
+          },
+        },
+      }
+    }
 
     const disabled = new Set(config.disabled_providers ?? [])
     const enabled = config.enabled_providers ? new Set(config.enabled_providers) : null
@@ -899,7 +1359,9 @@ export namespace Provider {
       const provider = s.providers[model.providerID]
       const options = { ...provider.options }
 
-      if (model.api.npm.includes("@ai-sdk/openai-compatible") && options["includeUsage"] !== false) {
+      const resolvedNpm = model.api.npm === "custom" ? "@ai-sdk/openai-compatible" : model.api.npm
+
+      if (resolvedNpm.includes("@ai-sdk/openai-compatible") && options["includeUsage"] !== false) {
         options["includeUsage"] = true
       }
 
@@ -911,7 +1373,7 @@ export namespace Provider {
           ...model.headers,
         }
 
-      const key = Bun.hash.xxHash32(JSON.stringify({ npm: model.api.npm, options }))
+      const key = Bun.hash.xxHash32(JSON.stringify({ npm: resolvedNpm, options }))
       const existing = s.sdk.get(key)
       if (existing) return existing
 
@@ -941,7 +1403,7 @@ export namespace Provider {
 
       // Special case: google-vertex-anthropic uses a subpath import
       const bundledKey =
-        model.providerID === "google-vertex-anthropic" ? "@ai-sdk/google-vertex/anthropic" : model.api.npm
+        model.providerID === "google-vertex-anthropic" ? "@ai-sdk/google-vertex/anthropic" : resolvedNpm
       const bundledFn = BUNDLED_PROVIDERS[bundledKey]
       if (bundledFn) {
         log.info("using bundled provider", { providerID: model.providerID, pkg: bundledKey })
@@ -954,11 +1416,11 @@ export namespace Provider {
       }
 
       let installedPath: string
-      if (!model.api.npm.startsWith("file://")) {
-        installedPath = await BunProc.install(model.api.npm, "latest")
+      if (!resolvedNpm.startsWith("file://")) {
+        installedPath = await BunProc.install(resolvedNpm, "latest")
       } else {
-        log.info("loading local provider", { pkg: model.api.npm })
-        installedPath = model.api.npm
+        log.info("loading local provider", { pkg: resolvedNpm })
+        installedPath = resolvedNpm
       }
 
       const mod = await import(installedPath)
