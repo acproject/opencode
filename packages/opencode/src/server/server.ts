@@ -1985,49 +1985,57 @@ export namespace Server {
             }
 
             const connected = await Provider.list()
-            const providers = Object.assign(mapValues(filteredProviders, (x) => Provider.fromModelsDevProvider(x)), {
-              ...(enabled && !enabled.has("owiseman") ? {} : disabled.has("owiseman") ? {} : {
-                  owiseman: {
-                    id: "owiseman",
-                    name: "Owiseman",
-                    source: "custom",
-                    env: ["OWISEMAN_API_KEY"],
-                    options: {},
-                    models: {
-                      "nemotron-3-nano:30b": {
-                        id: "nemotron-3-nano:30b",
-                        providerID: "owiseman",
-                        api: {
-                          id: "nemotron-3-nano:30b",
-                          url: "https://www.owiseman.com",
-                          npm: "@ai-sdk/openai-compatible",
-                        },
-                        name: "nemotron-3-nano:30b",
-                        capabilities: {
-                          temperature: true,
-                          reasoning: false,
-                          attachment: false,
-                          toolcall: true,
-                          input: { text: true, audio: false, image: false, video: false, pdf: false },
-                          output: { text: true, audio: false, image: false, video: false, pdf: false },
-                          interleaved: false,
-                        },
-                        cost: {
-                          input: 0,
-                          output: 0,
-                          cache: { read: 0, write: 0 },
-                        },
-                        limit: { context: 128000, output: 4096 },
-                        status: "active",
-                        options: {},
-                        headers: {},
-                        release_date: "2026-01-01",
-                        variants: {},
-                      },
-                    },
-                  } satisfies Provider.Info,
-                }),
-            } satisfies Record<string, Provider.Info>, connected)
+            const providers = Object.assign(
+              mapValues(filteredProviders, (x) => Provider.fromModelsDevProvider(x)),
+              {
+                ...(enabled && !enabled.has("owiseman")
+                  ? {}
+                  : disabled.has("owiseman")
+                    ? {}
+                    : {
+                        owiseman: {
+                          id: "owiseman",
+                          name: "Owiseman",
+                          source: "custom",
+                          env: ["OWISEMAN_API_KEY"],
+                          options: {},
+                          models: {
+                            "nemotron-3-nano:30b": {
+                              id: "nemotron-3-nano:30b",
+                              providerID: "owiseman",
+                              api: {
+                                id: "nemotron-3-nano:30b",
+                                url: "https://www.owiseman.com",
+                                npm: "@ai-sdk/openai-compatible",
+                              },
+                              name: "nemotron-3-nano:30b",
+                              capabilities: {
+                                temperature: true,
+                                reasoning: false,
+                                attachment: false,
+                                toolcall: true,
+                                input: { text: true, audio: false, image: false, video: false, pdf: false },
+                                output: { text: true, audio: false, image: false, video: false, pdf: false },
+                                interleaved: false,
+                              },
+                              cost: {
+                                input: 0,
+                                output: 0,
+                                cache: { read: 0, write: 0 },
+                              },
+                              limit: { context: 128000, output: 4096 },
+                              status: "active",
+                              options: {},
+                              headers: {},
+                              release_date: "2026-01-01",
+                              variants: {},
+                            },
+                          },
+                        } satisfies Provider.Info,
+                      }),
+              } satisfies Record<string, Provider.Info>,
+              connected,
+            )
             return c.json({
               all: Object.values(providers),
               default: mapValues(providers, (item) => Provider.sort(Object.values(item.models))[0].id),

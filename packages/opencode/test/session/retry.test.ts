@@ -81,41 +81,37 @@ describe("session.retry.delay", () => {
 })
 
 describe("session.message-v2.fromError", () => {
-  test(
-    "converts ECONNRESET socket errors to retryable APIError",
-    async () => {
-      using server = Bun.serve({
-        port: 0,
-        idleTimeout: 8,
-        async fetch(req) {
-          return new Response(
-            new ReadableStream({
-              async pull(controller) {
-                controller.enqueue("Hello,")
-                await Bun.sleep(10000)
-                controller.enqueue(" World!")
-                controller.close()
-              },
-            }),
-            { headers: { "Content-Type": "text/plain" } },
-          )
-        },
-      })
+  test("converts ECONNRESET socket errors to retryable APIError", async () => {
+    using server = Bun.serve({
+      port: 0,
+      idleTimeout: 8,
+      async fetch(req) {
+        return new Response(
+          new ReadableStream({
+            async pull(controller) {
+              controller.enqueue("Hello,")
+              await Bun.sleep(10000)
+              controller.enqueue(" World!")
+              controller.close()
+            },
+          }),
+          { headers: { "Content-Type": "text/plain" } },
+        )
+      },
+    })
 
-      const error = await fetch(new URL("/", server.url.origin))
-        .then((res) => res.text())
-        .catch((e) => e)
+    const error = await fetch(new URL("/", server.url.origin))
+      .then((res) => res.text())
+      .catch((e) => e)
 
-      const result = MessageV2.fromError(error, { providerID: "test" })
+    const result = MessageV2.fromError(error, { providerID: "test" })
 
-      expect(MessageV2.APIError.isInstance(result)).toBe(true)
-      expect((result as MessageV2.APIError).data.isRetryable).toBe(true)
-      expect((result as MessageV2.APIError).data.message).toBe("Connection reset by server")
-      expect((result as MessageV2.APIError).data.metadata?.code).toBe("ECONNRESET")
-      expect((result as MessageV2.APIError).data.metadata?.message).toInclude("socket connection")
-    },
-    15_000,
-  )
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    expect((result as MessageV2.APIError).data.isRetryable).toBe(true)
+    expect((result as MessageV2.APIError).data.message).toBe("Connection reset by server")
+    expect((result as MessageV2.APIError).data.metadata?.code).toBe("ECONNRESET")
+    expect((result as MessageV2.APIError).data.metadata?.message).toInclude("socket connection")
+  }, 15_000)
 
   test("ECONNRESET socket error is retryable", () => {
     const error = new MessageV2.APIError({

@@ -51,6 +51,9 @@ import type {
   McpLocalConfig,
   McpRemoteConfig,
   McpStatusResponses,
+  OllamaChatResponses,
+  OllamaGenerateResponses,
+  OllamaModelsResponses,
   Part as Part2,
   PartDeleteErrors,
   PartDeleteResponses,
@@ -316,6 +319,81 @@ export class Project extends HeyApiClient {
     )
     return (options?.client ?? this.client).patch<ProjectUpdateResponses, ProjectUpdateErrors, ThrowOnError>({
       url: "/project/{projectID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Ollama extends HeyApiClient {
+  /**
+   * List Ollama models (owiseman passthrough)
+   *
+   * Proxy request to owiseman Ollama models endpoint.
+   */
+  public models<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<OllamaModelsResponses, unknown, ThrowOnError>({
+      url: "/api/v1/ollama/models",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Ollama chat (owiseman passthrough)
+   *
+   * Proxy request to owiseman Ollama chat endpoint.
+   */
+  public chat<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      body?: {
+        [key: string]: unknown
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }, { in: "body" }] }])
+    return (options?.client ?? this.client).post<OllamaChatResponses, unknown, ThrowOnError>({
+      url: "/api/v1/ollama/chat",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Ollama generate (owiseman passthrough)
+   *
+   * Proxy request to owiseman Ollama generate endpoint.
+   */
+  public generate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      body?: {
+        [key: string]: unknown
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }, { in: "body" }] }])
+    return (options?.client ?? this.client).post<OllamaGenerateResponses, unknown, ThrowOnError>({
+      url: "/api/v1/ollama/generate",
       ...options,
       ...params,
       headers: {
@@ -2985,6 +3063,8 @@ export class OpencodeClient extends HeyApiClient {
   global = new Global({ client: this.client })
 
   project = new Project({ client: this.client })
+
+  ollama = new Ollama({ client: this.client })
 
   pty = new Pty({ client: this.client })
 

@@ -9,8 +9,22 @@ if (!expectedBunVersion) {
   throw new Error("packageManager field not found in root package.json")
 }
 
-if (process.versions.bun !== expectedBunVersion) {
-  throw new Error(`This script requires bun@${expectedBunVersion}, but you are using bun@${process.versions.bun}`)
+function parseVersion(v: string) {
+  const [major, minor, patch] = v.split(".").map((x) => Number(x) || 0)
+  return { major, minor, patch }
+}
+
+function compareVersion(a: { major: number; minor: number; patch: number }, b: { major: number; minor: number; patch: number }) {
+  if (a.major !== b.major) return a.major - b.major
+  if (a.minor !== b.minor) return a.minor - b.minor
+  return a.patch - b.patch
+}
+
+const expected = parseVersion(expectedBunVersion)
+const current = parseVersion(process.versions.bun)
+
+if (compareVersion(current, expected) < 0) {
+  throw new Error(`This script requires bun@>=${expectedBunVersion}, but you are using bun@${process.versions.bun}`)
 }
 
 const env = {

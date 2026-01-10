@@ -37,7 +37,11 @@ test("owiseman loads models from /api/v1/ollama/models", async () => {
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url =
-      typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url ?? String(input)
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : ((input as Request).url ?? String(input))
 
     if (url === "https://www.owiseman.com/api/v1/ollama/models") {
       sawModelsRequest = true

@@ -481,8 +481,13 @@ export namespace Provider {
       const templateReleaseDate = templateModel?.release_date ?? "2026-01-01"
 
       function extractModelNames(payload: any): string[] {
-        const list: any =
-          Array.isArray(payload) ? payload : Array.isArray(payload?.models) ? payload.models : Array.isArray(payload?.data) ? payload.data : []
+        const list: any = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.models)
+            ? payload.models
+            : Array.isArray(payload?.data)
+              ? payload.data
+              : []
 
         const out: string[] = []
         for (const item of list) {
@@ -681,13 +686,16 @@ export namespace Provider {
 
           const inputTokens: number | undefined =
             typeof parsed?.prompt_eval_count === "number" ? parsed.prompt_eval_count : undefined
-          const outputTokens: number | undefined = typeof parsed?.eval_count === "number" ? parsed.eval_count : undefined
+          const outputTokens: number | undefined =
+            typeof parsed?.eval_count === "number" ? parsed.eval_count : undefined
 
           const usage: LanguageModelV2Usage = {
             inputTokens,
             outputTokens,
             totalTokens:
-              typeof inputTokens === "number" && typeof outputTokens === "number" ? inputTokens + outputTokens : undefined,
+              typeof inputTokens === "number" && typeof outputTokens === "number"
+                ? inputTokens + outputTokens
+                : undefined,
           }
 
           const finishReason: LanguageModelV2FinishReason = "stop"
@@ -746,7 +754,11 @@ export namespace Provider {
 
           let currentTextId: string | null = null
           let finishReason: LanguageModelV2FinishReason = "unknown"
-          const usage: LanguageModelV2Usage = { inputTokens: undefined, outputTokens: undefined, totalTokens: undefined }
+          const usage: LanguageModelV2Usage = {
+            inputTokens: undefined,
+            outputTokens: undefined,
+            totalTokens: undefined,
+          }
 
           const stream = new ReadableStream<LanguageModelV2StreamPart>({
             async start(controller) {

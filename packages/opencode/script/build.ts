@@ -115,7 +115,16 @@ for (const item of targets) {
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
 
-  const parserWorker = fs.realpathSync(path.resolve(dir, "./node_modules/@opentui/core/parser.worker.js"))
+  const parserWorker = (() => {
+    const candidates = [
+      path.resolve(dir, "./node_modules/@opentui/core/parser.worker.js"),
+      path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js"),
+    ]
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return fs.realpathSync(candidate)
+    }
+    throw new Error(`Missing @opentui/core parser.worker.js. Tried: ${candidates.join(", ")}`)
+  })()
   const workerPath = "./src/cli/cmd/tui/worker.ts"
 
   // Use platform-specific bunfs root path based on target OS

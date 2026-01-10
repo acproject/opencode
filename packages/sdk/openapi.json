@@ -249,6 +249,134 @@
         ]
       }
     },
+    "/api/v1/ollama/models": {
+      "get": {
+        "operationId": "ollama.models",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List Ollama models (owiseman passthrough)",
+        "description": "Proxy request to owiseman Ollama models endpoint.",
+        "responses": {
+          "200": {
+            "description": "Ollama models response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpencodeClient } from \"@opencode-ai/sdk\n\nconst client = createOpencodeClient()\nawait client.ollama.models({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/v1/ollama/chat": {
+      "post": {
+        "operationId": "ollama.chat",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Ollama chat (owiseman passthrough)",
+        "description": "Proxy request to owiseman Ollama chat endpoint.",
+        "responses": {
+          "200": {
+            "description": "Ollama chat response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/x-ndjson": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpencodeClient } from \"@opencode-ai/sdk\n\nconst client = createOpencodeClient()\nawait client.ollama.chat({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/v1/ollama/generate": {
+      "post": {
+        "operationId": "ollama.generate",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Ollama generate (owiseman passthrough)",
+        "description": "Proxy request to owiseman Ollama generate endpoint.",
+        "responses": {
+          "200": {
+            "description": "Ollama generate response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/x-ndjson": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpencodeClient } from \"@opencode-ai/sdk\n\nconst client = createOpencodeClient()\nawait client.ollama.generate({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/pty": {
       "get": {
         "operationId": "pty.list",

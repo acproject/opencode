@@ -2204,6 +2204,58 @@ export type ProjectUpdateResponses = {
 
 export type ProjectUpdateResponse = ProjectUpdateResponses[keyof ProjectUpdateResponses]
 
+export type OllamaModelsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/api/v1/ollama/models"
+}
+
+export type OllamaModelsResponses = {
+  /**
+   * Ollama models response
+   */
+  200: unknown
+}
+
+export type OllamaChatData = {
+  body?: {
+    [key: string]: unknown
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/api/v1/ollama/chat"
+}
+
+export type OllamaChatResponses = {
+  /**
+   * Ollama chat response
+   */
+  200: unknown
+}
+
+export type OllamaGenerateData = {
+  body?: {
+    [key: string]: unknown
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/api/v1/ollama/generate"
+}
+
+export type OllamaGenerateResponses = {
+  /**
+   * Ollama generate response
+   */
+  200: unknown
+}
+
 export type PtyListData = {
   body?: never
   path?: never
