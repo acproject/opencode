@@ -5,6 +5,7 @@
 
 import z from "zod"
 import * as path from "path"
+import * as fs from "fs/promises"
 import { Tool } from "./tool"
 import { LSP } from "../lsp"
 import { createTwoFilesPatch, diffLines } from "diff"
@@ -69,6 +70,10 @@ export const EditTool = Tool.define("edit", {
             diff,
           },
         })
+        const parentDir = path.dirname(filePath)
+        if (parentDir !== "/" && parentDir !== ".") {
+          await fs.mkdir(parentDir, { recursive: true })
+        }
         await Bun.write(filePath, params.newString)
         await Bus.publish(File.Event.Edited, {
           file: filePath,

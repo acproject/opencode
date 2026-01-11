@@ -114,3 +114,13 @@ OpenCode 内置两种 Agent，可用 `Tab` 键快速切换：
 ---
 
 **加入我们的社区** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+
+
+### 编译
+```sh
+BUN_INSTALL_CACHE_DIR=/Users/acproject/workspace/react_project/opencode/.bun-cache bun install
+```
+
+```sh
+BUN_INSTALL_CACHE_DIR=/Users/acproject/workspace/react_project/opencode/.bun-cache bun run --cwd packages/opencode ./script/build.ts --single
+```
