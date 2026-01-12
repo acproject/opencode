@@ -132,7 +132,13 @@ export namespace LLM {
           OUTPUT_TOKEN_MAX,
         )
 
-    const tools = await resolveTools(input)
+    const resolvedTools = await resolveTools(input)
+    const allowTools =
+      input.model.capabilities.toolcall ||
+      input.model.api.npm.includes("openai-compatible") ||
+      input.model.family === "ollama" ||
+      input.model.providerID.includes("ollama")
+    const tools = allowTools ? resolvedTools : {}
 
     return streamText({
       onError(error) {

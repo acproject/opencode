@@ -22,10 +22,18 @@ export const AttachCommand = cmd({
       }),
   handler: async (args) => {
     if (args.dir) process.chdir(args.dir)
+    const directory = (() => {
+      if (args.dir) return process.cwd()
+      try {
+        const url = new URL(args.url)
+        if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") return process.cwd()
+      } catch {}
+      return undefined
+    })()
     await tui({
       url: args.url,
       args: { sessionID: args.session },
-      directory: args.dir ? process.cwd() : undefined,
+      directory,
     })
   },
 })

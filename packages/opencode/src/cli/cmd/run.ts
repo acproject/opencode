@@ -276,7 +276,14 @@ export const RunCommand = cmd({
     }
 
     if (args.attach) {
-      const sdk = createOpencodeClient({ baseUrl: args.attach })
+      const directory = (() => {
+        try {
+          const url = new URL(args.attach)
+          if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") return process.cwd()
+        } catch {}
+        return undefined
+      })()
+      const sdk = createOpencodeClient({ baseUrl: args.attach, directory })
 
       const sessionID = await (async () => {
         if (args.continue) {
