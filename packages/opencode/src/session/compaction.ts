@@ -6,7 +6,6 @@ import { Instance } from "../project/instance"
 import { Provider } from "../provider/provider"
 import { MessageV2 } from "./message-v2"
 import z from "zod"
-import { SessionPrompt } from "./prompt"
 import { Token } from "../util/token"
 import { Log } from "../util/log"
 import { SessionProcessor } from "./processor"
@@ -14,9 +13,11 @@ import { fn } from "@/util/fn"
 import { Agent } from "@/agent/agent"
 import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
+import { Flag } from "@/flag/flag"
 
 export namespace SessionCompaction {
   const log = Log.create({ service: "session.compaction" })
+  const outputTokenMax = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
 
   export const Event = {
     Compacted: BusEvent.define(
@@ -33,7 +34,7 @@ export namespace SessionCompaction {
     const context = input.model.limit.context
     if (context === 0) return false
     const count = input.tokens.input + input.tokens.cache.read + input.tokens.output
-    const output = Math.min(input.model.limit.output, SessionPrompt.OUTPUT_TOKEN_MAX) || SessionPrompt.OUTPUT_TOKEN_MAX
+    const output = Math.min(input.model.limit.output, outputTokenMax) || outputTokenMax
     const usable = context - output
     return count > usable
   }

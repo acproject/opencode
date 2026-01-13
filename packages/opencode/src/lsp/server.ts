@@ -10,6 +10,7 @@ import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { Flag } from "../flag/flag"
 import { Archive } from "../util/archive"
+import { getLspEnvironment } from "./env"
 
 export namespace LSPServer {
   const log = Log.create({ service: "lsp.server" })
@@ -81,6 +82,7 @@ export namespace LSPServer {
       return {
         process: spawn(deno, ["lsp"], {
           cwd: root,
+          env: getLspEnvironment(),
         }),
       }
     },
@@ -99,10 +101,7 @@ export namespace LSPServer {
       if (!tsserver) return
       const proc = spawn(BunProc.which(), ["x", "typescript-language-server", "--stdio"], {
         cwd: root,
-        env: {
-          ...process.env,
-          BUN_BE_BUN: "1",
-        },
+        env: getLspEnvironment(),
       })
       return {
         process: proc,
@@ -115,7 +114,7 @@ export namespace LSPServer {
     },
   }
 
-  export const Vue: Info = {
+export const Vue: Info = {
     id: "vue",
     extensions: [".vue"],
     root: NearestRoot(["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]),
@@ -135,13 +134,7 @@ export namespace LSPServer {
           if (Flag.OPENCODE_DISABLE_LSP_DOWNLOAD) return
           await Bun.spawn([BunProc.which(), "install", "@vue/language-server"], {
             cwd: Global.Path.bin,
-            env: {
-              ...process.env,
-              BUN_BE_BUN: "1",
-            },
-            stdout: "pipe",
-            stderr: "pipe",
-            stdin: "pipe",
+            env: getLspEnvironment(),
           }).exited
         }
         binary = BunProc.which()
@@ -150,10 +143,7 @@ export namespace LSPServer {
       args.push("--stdio")
       const proc = spawn(binary, args, {
         cwd: root,
-        env: {
-          ...process.env,
-          BUN_BE_BUN: "1",
-        },
+        env: getLspEnvironment(),
       })
       return {
         process: proc,
@@ -210,10 +200,7 @@ export namespace LSPServer {
 
       const proc = spawn(BunProc.which(), [serverPath, "--stdio"], {
         cwd: root,
-        env: {
-          ...process.env,
-          BUN_BE_BUN: "1",
-        },
+        env: getLspEnvironment(),
       })
 
       return {
@@ -515,10 +502,7 @@ export namespace LSPServer {
           if (Flag.OPENCODE_DISABLE_LSP_DOWNLOAD) return
           await Bun.spawn([BunProc.which(), "install", "pyright"], {
             cwd: Global.Path.bin,
-            env: {
-              ...process.env,
-              BUN_BE_BUN: "1",
-            },
+            env: getLspEnvironment(),
           }).exited
         }
         binary = BunProc.which()
@@ -544,10 +528,7 @@ export namespace LSPServer {
 
       const proc = spawn(binary, args, {
         cwd: root,
-        env: {
-          ...process.env,
-          BUN_BE_BUN: "1",
-        },
+        env: getLspEnvironment(),
       })
       return {
         process: proc,

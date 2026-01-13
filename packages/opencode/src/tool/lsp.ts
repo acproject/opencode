@@ -27,12 +27,29 @@ export const LspTool = Tool.define("lsp", {
     character: z.number().int().min(1).describe("The character offset (1-based, as shown in editors)"),
   }),
   execute: async (args, ctx) => {
-    await ctx.ask({
-      permission: "lsp",
-      patterns: ["*"],
-      always: ["*"],
-      metadata: {},
-    })
+    // 环境检测
+    const isProduction = process.env.BUILD_MODE === "production"
+
+    if (isProduction) {
+      // 生产模式下的特殊处理
+      await ctx.ask({
+        permission: "lsp",
+        patterns: ["*"],
+        always: ["*"],
+        metadata: {
+          productionMode: true,
+          bypassCache: true,
+        },
+      })
+    } else {
+      // 开发模式保持原有逻辑
+      await ctx.ask({
+        permission: "lsp",
+        patterns: ["*"],
+        always: ["*"],
+        metadata: {},
+      })
+    }
 
     const file = path.isAbsolute(args.filePath) ? args.filePath : path.join(Instance.directory, args.filePath)
     const uri = pathToFileURL(file).href

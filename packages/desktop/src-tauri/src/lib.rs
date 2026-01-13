@@ -15,6 +15,7 @@ use tauri::{
 };
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpSocket;
 
 use crate::window_customizer::PinchZoomDisablePlugin;
@@ -183,14 +184,38 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
 }
 
 async fn is_server_running(port: u32) -> bool {
-    TcpSocket::new_v4()
-        .unwrap()
-        .connect(SocketAddr::new(
+    let Ok(socket) = TcpSocket::new_v4() else {
+        return false;
+    };
+
+    let Ok(Ok(mut stream)) = tokio::time::timeout(
+        Duration::from_millis(300),
+        socket.connect(SocketAddr::new(
             "127.0.0.1".parse().expect("Failed to parse IP"),
             port as u16,
-        ))
+        )),
+    )
+    .await else {
+        return false;
+    };
+
+    let request = b"GET /global/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+
+    if tokio::time::timeout(Duration::from_millis(300), stream.write_all(request))
         .await
-        .is_ok()
+        .is_err()
+    {
+        return false;
+    }
+
+    let mut buf = [0u8; 2048];
+    let Ok(Ok(n)) = tokio::time::timeout(Duration::from_millis(600), stream.read(&mut buf)).await
+    else {
+        return false;
+    };
+
+    let output = String::from_utf8_lossy(&buf[..n]);
+    output.contains("\"healthy\":true") || output.contains("\"healthy\": true")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -280,11 +305,11 @@ pub fn run() {
                                 ));
                             }
 
-                            tokio::time::sleep(Duration::from_millis(10)).await;
+                            tokio::time::sleep(Duration::from_millis(50)).await;
 
                             if is_server_running(port).await {
                                 // give the server a little bit more time to warm up
-                                tokio::time::sleep(Duration::from_millis(10)).await;
+                                tokio::time::sleep(Duration::from_millis(50)).await;
 
                                 break Ok(());
                             }

@@ -118,9 +118,30 @@ OpenCode 内置两种 Agent，可用 `Tab` 键快速切换：
 
 ### 编译
 ```sh
-BUN_INSTALL_CACHE_DIR=/Users/acproject/workspace/react_project/opencode/.bun-cache bun install
+BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun install
 ```
 
 ```sh
-BUN_INSTALL_CACHE_DIR=/Users/acproject/workspace/react_project/opencode/.bun-cache bun run --cwd packages/opencode ./script/build.ts --single
+BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun run --cwd packages/opencode ./script/build.ts --single
+```
+
+### 打包为opencode-desktop
+
+* 准备工作
+
+```sh
+bun -v && node -v && rustc --version && cargo --version && (bunx tauri --version || true) && bun pm ls --cwd packages/desktop >/dev/null 2>&1 || true
+```
+* 安装依赖
+```sh
+bun install --frozen-lockfile
+```
+
+* 创建安装路径
+```sh
+mkdir -p  ~/workspace/react_project/opencode/.bun-cache && TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun install --frozen-lockfile
+```
+* 开始打包
+```sh
+TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun run --cwd packages/desktop tauri build
 ```

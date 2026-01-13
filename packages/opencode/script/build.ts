@@ -18,6 +18,11 @@ import { Script } from "@opencode-ai/script"
 const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
+const devFlag = process.argv.includes("--dev")
+
+// 环境检测：开发模式 vs 生产模式
+const isDevelopment = devFlag
+const isProduction = !devFlag
 
 const allTargets: {
   os: string
@@ -132,7 +137,7 @@ for (const item of targets) {
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
   await Bun.build({
-    conditions: ["browser"],
+    conditions: ["browser", isDevelopment ? "development" : "production"],
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
     sourcemap: "external",
@@ -154,6 +159,8 @@ for (const item of targets) {
       OPENCODE_WORKER_PATH: workerPath,
       OPENCODE_CHANNEL: `'${Script.channel}'`,
       OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
+      "process.env.NODE_ENV": isDevelopment ? '"development"' : '"production"',
+      "process.env.BUILD_MODE": isDevelopment ? '"development"' : '"production"',
     },
   })
 
