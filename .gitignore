@@ -26,4 +26,9 @@ opencode-dev
 logs/
 packages/
 
-packages/opencode/dist
+.bun-cache
+opencode-test-*
+.bun-cache/**
+typescript-*
+.78fe3ffffef6ffff-00000000.hm
+.ddab77afaeee1ecd-00000000.hm

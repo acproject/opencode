@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
+import z from "zod"
 import { ReadTool } from "../../src/tool/read"
+import { WriteTool } from "../../src/tool/write"
+import { EditTool } from "../../src/tool/edit"
 import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 import { PermissionNext } from "../../src/permission/next"
@@ -297,6 +300,81 @@ describe("tool.read truncation", () => {
         expect(result.attachments).toBeDefined()
         expect(result.attachments?.length).toBe(1)
         expect(result.attachments?.[0].type).toBe("file")
+      },
+    })
+  })
+})
+
+let hasLangChainTools = false
+try {
+  await import("@langchain/core/tools")
+  hasLangChainTools = true
+} catch {}
+const testLangChain = hasLangChainTools ? test : test.skip
+
+describe("LangChainToolRuntime M1", () => {
+  testLangChain("executes a minimal bridged tool", async () => {
+    const { LangChainToolRuntime } = await import("../../src/runtime/tool-runtime-langchain")
+    const runtime = LangChainToolRuntime.create()
+    const result = await runtime.execute({
+      tool: {
+        id: "echo",
+        description: "echo tool",
+        parameters: z.object({ text: z.string() }),
+        execute: async (args: any, receivedCtx) => {
+          expect(receivedCtx.sessionID).toBe("test")
+          return {
+            title: "ok",
+            metadata: {},
+            output: args.text,
+          }
+        },
+      },
+      args: { text: "hello" },
+      ctx,
+    })
+    expect(result.output).toBe("hello")
+  })
+
+  testLangChain("executes write/read/edit via LangChain runtime", async () => {
+    const { LangChainToolRuntime } = await import("../../src/runtime/tool-runtime-langchain")
+    const runtime = LangChainToolRuntime.create()
+
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const filepath = path.join(tmp.path, "a.txt")
+
+        const write = await WriteTool.init()
+        const writeResult = await runtime.execute({
+          tool: { ...write, id: WriteTool.id },
+          args: { filePath: filepath, content: "hello" },
+          ctx,
+        })
+        expect(writeResult.title).toContain("a.txt")
+
+        const read = await ReadTool.init()
+        const readResult = await runtime.execute({
+          tool: { ...read, id: ReadTool.id },
+          args: { filePath: filepath },
+          ctx,
+        })
+        expect(readResult.output).toContain("hello")
+
+        const edit = await EditTool.init()
+        await runtime.execute({
+          tool: { ...edit, id: EditTool.id },
+          args: { filePath: filepath, oldString: "hello", newString: "world" },
+          ctx,
+        })
+
+        const readResult2 = await runtime.execute({
+          tool: { ...read, id: ReadTool.id },
+          args: { filePath: filepath },
+          ctx,
+        })
+        expect(readResult2.output).toContain("world")
       },
     })
   })

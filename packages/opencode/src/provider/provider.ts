@@ -48,6 +48,7 @@ import { createTogetherAI } from "@ai-sdk/togetherai"
 import { createPerplexity } from "@ai-sdk/perplexity"
 import { createVercel } from "@ai-sdk/vercel"
 import { ProviderTransform } from "./transform"
+import { ProviderExtensions } from "./extensions"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
@@ -1895,7 +1896,7 @@ export namespace Provider {
       }
     }
 
-    for (const [providerID, fn] of Object.entries(CUSTOM_LOADERS)) {
+    for (const [providerID, fn] of Object.entries({ ...CUSTOM_LOADERS, ...ProviderExtensions.customLoaders() })) {
       if (disabled.has(providerID)) continue
       const result = await fn(database[providerID])
       if (result && (result.autoload || providers[providerID])) {

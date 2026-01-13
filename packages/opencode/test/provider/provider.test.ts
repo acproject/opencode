@@ -1,9 +1,19 @@
-import { test, expect } from "bun:test"
+import { test, expect, afterAll } from "bun:test"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { Provider } from "../../src/provider/provider"
 import { Env } from "../../src/env"
+import { BunProc } from "../../src/bun"
+
+const originalInstall = BunProc.install
+;(BunProc as any).install = async (pkg: string, version?: string) => {
+  if (pkg === "opencode-copilot-auth" || pkg === "opencode-anthropic-auth") return ""
+  return originalInstall(pkg, version as any)
+}
+afterAll(() => {
+  ;(BunProc as any).install = originalInstall
+})
 
 test("provider loaded from env variable", async () => {
   await using tmp = await tmpdir({
