@@ -472,7 +472,7 @@ export namespace Provider {
           temperature: true,
           reasoning: false,
           attachment: false,
-          toolcall: true,
+          toolcall: false,
           input: { text: true, audio: false, image: false, video: false, pdf: false },
           output: { text: true, audio: false, image: false, video: false, pdf: false },
           interleaved: false,
@@ -1063,7 +1063,7 @@ export namespace Provider {
               temperature: true,
               reasoning: false,
               attachment: false,
-              toolcall: true,
+              toolcall: false,
               input: { text: true, audio: false, image: false, video: false, pdf: false },
               output: { text: true, audio: false, image: false, video: false, pdf: false },
               interleaved: false,
@@ -1146,6 +1146,8 @@ export namespace Provider {
           if (model.id && model.id !== modelID) return modelID
           return existingModel?.name ?? modelID
         })
+        const cfgToolCall =
+          model.tool_call ?? model.toolCall ?? model.toolcall ?? existingModel?.capabilities.toolcall ?? true
         const parsedModel: Model = {
           id: modelID,
           api: {
@@ -1165,7 +1167,7 @@ export namespace Provider {
             temperature: model.temperature ?? existingModel?.capabilities.temperature ?? false,
             reasoning: model.reasoning ?? existingModel?.capabilities.reasoning ?? false,
             attachment: model.attachment ?? existingModel?.capabilities.attachment ?? false,
-            toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? true,
+            toolcall: cfgToolCall,
             input: {
               text: model.modalities?.input?.includes("text") ?? existingModel?.capabilities.input.text ?? true,
               audio: model.modalities?.input?.includes("audio") ?? existingModel?.capabilities.input.audio ?? false,
@@ -1482,9 +1484,15 @@ export namespace Provider {
     const sdk = await getSDK(model)
 
     try {
-      const language = s.modelLoaders[model.providerID]
-        ? await s.modelLoaders[model.providerID](sdk, model.api.id, provider.options)
-        : sdk.languageModel(model.api.id)
+      const language = await (async () => {
+        if (s.modelLoaders[model.providerID]) {
+          return s.modelLoaders[model.providerID](sdk, model.api.id, provider.options)
+        }
+        if ((model.family === "ollama" || model.providerID.includes("ollama")) && typeof (sdk as any).chat === "function") {
+          return (sdk as any).chat(model.api.id)
+        }
+        return sdk.languageModel(model.api.id)
+      })()
       s.models.set(key, language)
       return language
     } catch (e) {

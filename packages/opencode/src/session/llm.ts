@@ -133,12 +133,12 @@ export namespace LLM {
         )
 
     const resolvedTools = await resolveTools(input)
-    const allowTools =
-      input.model.capabilities.toolcall ||
-      input.model.api.npm.includes("openai-compatible") ||
-      input.model.family === "ollama" ||
-      input.model.providerID.includes("ollama")
-    const tools = allowTools ? resolvedTools : {}
+    const tools = input.model.capabilities.toolcall ? resolvedTools : {}
+    l.info("tools", {
+      toolcall: input.model.capabilities.toolcall,
+      toolCount: Object.keys(tools).length,
+      activeToolCount: Object.keys(tools).filter((x) => x !== "invalid").length,
+    })
 
     return streamText({
       onError(error) {

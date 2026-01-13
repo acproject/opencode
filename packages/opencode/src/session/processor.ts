@@ -124,6 +124,10 @@ export namespace SessionProcessor {
                   break
 
                 case "tool-call": {
+                  log.info("tool.call", {
+                    tool: value.toolName,
+                    toolCallId: value.toolCallId,
+                  })
                   const match = toolcalls[value.toolCallId]
                   if (match) {
                     const part = await Session.updatePart({
@@ -170,6 +174,9 @@ export namespace SessionProcessor {
                   break
                 }
                 case "tool-result": {
+                  log.info("tool.result", {
+                    toolCallId: value.toolCallId,
+                  })
                   const match = toolcalls[value.toolCallId]
                   if (match && match.state.status === "running") {
                     await Session.updatePart({
@@ -194,6 +201,9 @@ export namespace SessionProcessor {
                 }
 
                 case "tool-error": {
+                  log.info("tool.error", {
+                    toolCallId: value.toolCallId,
+                  })
                   const match = toolcalls[value.toolCallId]
                   if (match && match.state.status === "running") {
                     await Session.updatePart({

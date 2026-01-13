@@ -797,6 +797,8 @@ export namespace Config {
         .record(
           z.string(),
           ModelsDev.Model.partial().extend({
+            toolcall: z.boolean().optional(),
+            toolCall: z.boolean().optional(),
             variants: z
               .record(
                 z.string(),

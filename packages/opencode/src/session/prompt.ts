@@ -691,6 +691,13 @@ export namespace SessionPrompt {
         inputSchema: jsonSchema(schema as any),
         async execute(args, options) {
           const ctx = context(args, options)
+          log.info("tool.execute", {
+            tool: item.id,
+            callID: ctx.callID,
+            sessionID: ctx.sessionID,
+            argsType: typeof args,
+            argKeys: args && typeof args === "object" ? Object.keys(args).slice(0, 20) : [],
+          })
           await Plugin.trigger(
             "tool.execute.before",
             {
@@ -712,6 +719,11 @@ export namespace SessionPrompt {
             },
             result,
           )
+          log.info("tool.executed", {
+            tool: item.id,
+            callID: ctx.callID,
+            sessionID: ctx.sessionID,
+          })
           return result
         },
         toModelOutput(result) {

@@ -9,7 +9,6 @@ import os from "os"
 
 import PROMPT_ANTHROPIC from "./prompt/anthropic.txt"
 import PROMPT_ANTHROPIC_WITHOUT_TODO from "./prompt/qwen.txt"
-import PROMPT_BEAST from "./prompt/beast.txt"
 import PROMPT_GEMINI from "./prompt/gemini.txt"
 import PROMPT_ANTHROPIC_SPOOF from "./prompt/anthropic_spoof.txt"
 
@@ -29,17 +28,9 @@ export namespace SystemPrompt {
   }
 
   export function provider(model: Provider.Model) {
-    if (model.api.id.includes("gpt-5")) return [PROMPT_CODEX]
-    if (model.api.id.includes("gpt-") || model.api.id.includes("o1") || model.api.id.includes("o3"))
-      return [PROMPT_BEAST]
     if (model.api.id.includes("gemini-")) return [PROMPT_GEMINI]
     if (model.api.id.includes("claude")) return [PROMPT_ANTHROPIC]
-    const likelyToolcall =
-      model.capabilities.toolcall ||
-      model.api.npm.includes("openai-compatible") ||
-      model.family === "ollama" ||
-      model.providerID.includes("ollama")
-    if (!likelyToolcall) return [PROMPT_ANTHROPIC_WITHOUT_TODO]
+    if (!model.capabilities.toolcall) return [PROMPT_ANTHROPIC_WITHOUT_TODO]
     return [PROMPT_CODEX]
   }
 
