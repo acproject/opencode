@@ -84,6 +84,580 @@ export namespace Provider {
   }>
 
   const CUSTOM_LOADERS: Record<string, CustomLoader> = {
+    ollama: async (input) => {
+      const cfg = await Config.get()
+      const providerCfg = cfg.provider?.["ollama"]
+      const baseURLRaw =
+        providerCfg?.options?.baseURL ??
+        providerCfg?.options?.api ??
+        Env.get("OLLAMA_BASE_URL") ??
+        Env.get("OLLAMA_HOST") ??
+        "http://127.0.0.1:11434"
+
+      const baseURL = (() => {
+        if (typeof baseURLRaw !== "string" || baseURLRaw.length === 0) return "http://127.0.0.1:11434"
+        if (baseURLRaw.startsWith("http://") || baseURLRaw.startsWith("https://")) return baseURLRaw
+        return `http://${baseURLRaw}`
+      })()
+
+      const promptToolCall =
+        providerCfg?.options?.toolCallMode === "prompt" ||
+        providerCfg?.options?.promptToolCall === true ||
+        providerCfg?.options?.toolcall === "prompt"
+
+      if (promptToolCall) {
+        for (const model of Object.values(input.models)) {
+          model.capabilities.toolcall = true
+        }
+      }
+
+      function headersToRecord(headers: Headers): Record<string, string> {
+        const out: Record<string, string> = {}
+        headers.forEach((value, key) => {
+          out[key] = value
+        })
+        return out
+      }
+
+      function extractJson(text: string): any | undefined {
+        const trimmed = text.trim()
+        if (!trimmed) return undefined
+        const start = trimmed.indexOf("{")
+        const end = trimmed.lastIndexOf("}")
+        if (start < 0 || end < 0 || end <= start) return undefined
+        const slice = trimmed.slice(start, end + 1)
+        try {
+          return JSON.parse(slice)
+        } catch {
+          return undefined
+        }
+      }
+
+      function parsePromptToolCall(text: string):
+        | { kind: "tool"; calls: Array<{ name: string; arguments: any }> }
+        | { kind: "final"; text: string } {
+        const json = extractJson(text)
+        const root = json?.opencode ?? json
+        const toolCalls = root?.tool_calls ?? root?.toolCalls ?? root?.toolcalls
+        if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+          const calls = toolCalls
+            .map((call: any) => {
+              const name = typeof call?.name === "string" ? call.name : typeof call?.tool === "string" ? call.tool : undefined
+              const args = call?.arguments ?? call?.args ?? call?.input ?? {}
+              if (!name) return undefined
+              return { name, arguments: args }
+            })
+            .filter(Boolean) as Array<{ name: string; arguments: any }>
+          if (calls.length > 0) return { kind: "tool", calls }
+        }
+        const finalText =
+          (typeof root?.final === "string" ? root.final : undefined) ??
+          (typeof root?.content === "string" ? root.content : undefined) ??
+          (typeof root?.text === "string" ? root.text : undefined)
+        if (typeof finalText === "string") return { kind: "final", text: finalText }
+        return { kind: "final", text }
+      }
+
+      function toolInstruction(tools: any, toolChoice: any) {
+        const list = Array.isArray(tools) ? tools : tools ? Object.values(tools) : []
+        const rendered = list
+          .map((t: any) => {
+            const name = t?.name ?? t?.toolName ?? t?.id
+            const description = t?.description
+            const parameters = t?.parameters ?? t?.schema ?? t?.inputSchema
+            return JSON.stringify({ name, description, parameters })
+          })
+          .join("\n")
+
+        const choice = toolChoice ? JSON.stringify(toolChoice) : "auto"
+        return [
+          "Respond with exactly one JSON object and nothing else.",
+          "Do not wrap in markdown fences. Do not include extra text.",
+          "If calling a tool, respond with exactly:",
+          '{"opencode":{"tool_calls":[{"name":"<toolName>","arguments":{}}]}}',
+          "If responding normally, respond with exactly:",
+          '{"opencode":{"final":"<text>"}}',
+          `tool_choice=${choice}`,
+          "tools:",
+          rendered,
+        ].join("\n")
+      }
+
+      function extractModelNames(payload: any): string[] {
+        const list: any = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.models)
+            ? payload.models
+            : Array.isArray(payload?.data)
+              ? payload.data
+              : []
+
+        const out: string[] = []
+        for (const item of list) {
+          if (typeof item === "string") {
+            out.push(item)
+            continue
+          }
+          const name =
+            (typeof item?.name === "string" ? item.name : undefined) ??
+            (typeof item?.model === "string" ? item.model : undefined) ??
+            (typeof item?.id === "string" ? item.id : undefined)
+          if (name) out.push(name)
+        }
+        return Array.from(new Set(out)).filter(Boolean)
+      }
+
+      const templateModel = Object.values(input.models)[0]
+      const templateCapabilities =
+        templateModel?.capabilities ??
+        ({
+          temperature: true,
+          reasoning: false,
+          attachment: false,
+          toolcall: false,
+          input: { text: true, audio: false, image: false, video: false, pdf: false },
+          output: { text: true, audio: false, image: false, video: false, pdf: false },
+          interleaved: false,
+        } as any)
+      const templateLimit = templateModel?.limit ?? ({ context: 16384, output: 4096 } as any)
+      const templateReleaseDate = templateModel?.release_date ?? "2026-01-01"
+
+      const discovered = await (async () => {
+        try {
+          const url = new URL("/api/tags", baseURL).toString()
+          const response = await fetch(url, {
+            method: "GET",
+            headers: {
+              "User-Agent": Installation.USER_AGENT,
+            },
+            signal: AbortSignal.timeout(2500),
+          })
+          const raw = await response.text()
+          if (!response.ok) return []
+          let parsed: any
+          try {
+            parsed = JSON.parse(raw)
+          } catch {
+            parsed = undefined
+          }
+          return extractModelNames(parsed)
+        } catch {
+          return []
+        }
+      })()
+
+      for (const modelID of discovered) {
+        if (input.models[modelID]) continue
+        input.models[modelID] = {
+          id: modelID,
+          providerID: input.id,
+          api: {
+            id: modelID,
+            url: baseURL,
+            npm: "@ai-sdk/openai-compatible",
+          },
+          name: modelID,
+          family: "ollama",
+          capabilities: { ...templateCapabilities, toolcall: promptToolCall ? true : templateCapabilities.toolcall },
+          cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          limit: templateLimit,
+          status: "active",
+          options: {},
+          headers: {},
+          release_date: templateReleaseDate,
+          variants: {},
+        }
+      }
+
+      if (Object.keys(input.models).length === 0) {
+        const fallbackModelId = typeof providerCfg?.options?.fallbackModel === "string" ? providerCfg.options.fallbackModel : "llama3.1:8b-instruct"
+        input.models[fallbackModelId] = {
+          id: fallbackModelId,
+          providerID: input.id,
+          api: {
+            id: fallbackModelId,
+            url: baseURL,
+            npm: "@ai-sdk/openai-compatible",
+          },
+          name: fallbackModelId,
+          family: "ollama",
+          capabilities: { ...templateCapabilities, toolcall: promptToolCall ? true : templateCapabilities.toolcall },
+          cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          limit: templateLimit,
+          status: "active",
+          options: {},
+          headers: {},
+          release_date: templateReleaseDate,
+          variants: {},
+        }
+      }
+
+      class OllamaChatModel implements CoreLanguageModelV2 {
+        readonly specificationVersion = "v2"
+        readonly modelId: string
+        readonly supportedUrls: Record<string, RegExp[]> = {}
+        private readonly cfg: { baseURL: string; promptToolCall: boolean }
+
+        constructor(modelId: string, cfg: { baseURL: string; promptToolCall: boolean }) {
+          this.modelId = modelId
+          this.cfg = cfg
+        }
+
+        get provider(): string {
+          return "ollama"
+        }
+
+        private toOllamaMessages(prompt: LanguageModelV2Prompt) {
+          return prompt.map((msg) => {
+            const content =
+              typeof msg.content === "string"
+                ? msg.content
+                : msg.content
+                    .map((part: any) => {
+                      if (part?.type === "text") return String(part.text ?? "")
+                      if (part?.type === "tool-result") return JSON.stringify(part.result ?? {})
+                      return ""
+                    })
+                    .join("")
+            const role =
+              msg.role === "system" || msg.role === "user" || msg.role === "assistant" || msg.role === "tool"
+                ? msg.role
+                : "user"
+            return { role, content }
+          })
+        }
+
+        private async callOllama({
+          stream,
+          prompt,
+          headers,
+          abortSignal,
+          temperature,
+          topP,
+          maxOutputTokens,
+          tools,
+          toolChoice,
+        }: {
+          stream: boolean
+          prompt: LanguageModelV2Prompt
+          headers?: Record<string, string | undefined>
+          abortSignal?: AbortSignal
+          temperature?: number
+          topP?: number
+          maxOutputTokens?: number
+          tools?: any
+          toolChoice?: any
+        }) {
+          const mergedHeaders = new Headers()
+          for (const [k, v] of Object.entries(headers ?? {})) {
+            if (v == null) continue
+            mergedHeaders.set(k, v)
+          }
+          mergedHeaders.set("Content-Type", "application/json")
+          mergedHeaders.set("User-Agent", Installation.USER_AGENT)
+
+          const shouldPromptToolCall = this.cfg.promptToolCall && tools && (Array.isArray(tools) ? tools.length > 0 : true)
+          const injectedPrompt: LanguageModelV2Prompt = shouldPromptToolCall
+            ? [
+                {
+                  role: "system",
+                  content: toolInstruction(tools, toolChoice),
+                } as any,
+                ...prompt,
+              ]
+            : prompt
+
+          const body: any = {
+            model: this.modelId,
+            messages: this.toOllamaMessages(injectedPrompt),
+            stream,
+          }
+          if (shouldPromptToolCall) body.format = "json"
+
+          if (typeof temperature === "number") body.options = { ...(body.options ?? {}), temperature }
+          if (typeof topP === "number") body.options = { ...(body.options ?? {}), top_p: topP }
+          if (typeof maxOutputTokens === "number") body.options = { ...(body.options ?? {}), num_predict: maxOutputTokens }
+
+          const url = new URL("/api/chat", this.cfg.baseURL).toString()
+          const response = await fetch(url, {
+            method: "POST",
+            headers: mergedHeaders,
+            body: JSON.stringify(body),
+            signal: abortSignal,
+          })
+          return { response, body, shouldPromptToolCall }
+        }
+
+        async doGenerate(
+          options: Parameters<CoreLanguageModelV2["doGenerate"]>[0],
+        ): Promise<Awaited<ReturnType<CoreLanguageModelV2["doGenerate"]>>> {
+          const warnings: LanguageModelV2CallWarning[] = []
+
+          const { response, body, shouldPromptToolCall } = await this.callOllama({
+            stream: false,
+            prompt: options.prompt,
+            headers: options.headers,
+            abortSignal: options.abortSignal,
+            temperature: (options as any).temperature,
+            topP: (options as any).topP,
+            maxOutputTokens: (options as any).maxOutputTokens,
+            tools: (options as any).tools,
+            toolChoice: (options as any).toolChoice,
+          })
+
+          const rawText = await response.text()
+          if (!response.ok) {
+            throw new APICallError({
+              message: `Ollama request failed (${response.status})`,
+              url: response.url,
+              requestBodyValues: body,
+              statusCode: response.status,
+              responseHeaders: headersToRecord(response.headers),
+              responseBody: rawText,
+              isRetryable: response.status >= 500,
+            })
+          }
+
+          let parsed: any
+          try {
+            parsed = JSON.parse(rawText)
+          } catch {
+            parsed = undefined
+          }
+
+          const text: string =
+            (parsed?.message && typeof parsed.message.content === "string" ? parsed.message.content : undefined) ??
+            (typeof parsed?.response === "string" ? parsed.response : "") ??
+            ""
+
+          const inputTokens: number | undefined =
+            typeof parsed?.prompt_eval_count === "number" ? parsed.prompt_eval_count : undefined
+          const outputTokens: number | undefined = typeof parsed?.eval_count === "number" ? parsed.eval_count : undefined
+          const usage: LanguageModelV2Usage = {
+            inputTokens,
+            outputTokens,
+            totalTokens:
+              typeof inputTokens === "number" && typeof outputTokens === "number" ? inputTokens + outputTokens : undefined,
+          }
+
+          if (shouldPromptToolCall) {
+            const parsedToolCall = parsePromptToolCall(text)
+            if (parsedToolCall.kind === "tool") {
+              const content: LanguageModelV2Content[] = parsedToolCall.calls.map((call) => ({
+                type: "tool-call",
+                toolCallId: crypto.randomUUID(),
+                toolName: call.name,
+                input: JSON.stringify(call.arguments ?? {}),
+              }))
+              return {
+                content,
+                finishReason: "tool-calls",
+                usage,
+                request: { body },
+                response: {
+                  id: typeof parsed?.id === "string" ? parsed.id : undefined,
+                  timestamp: new Date(Date.now()),
+                  modelId: typeof parsed?.model === "string" ? parsed.model : this.modelId,
+                  headers: headersToRecord(response.headers),
+                  body: rawText,
+                },
+                providerMetadata: {} satisfies SharedV2ProviderMetadata,
+                warnings,
+              }
+            }
+            const content: LanguageModelV2Content[] = [{ type: "text", text: parsedToolCall.text }]
+            return {
+              content,
+              finishReason: "stop",
+              usage,
+              request: { body },
+              response: {
+                id: typeof parsed?.id === "string" ? parsed.id : undefined,
+                timestamp: new Date(Date.now()),
+                modelId: typeof parsed?.model === "string" ? parsed.model : this.modelId,
+                headers: headersToRecord(response.headers),
+                body: rawText,
+              },
+              providerMetadata: {} satisfies SharedV2ProviderMetadata,
+              warnings,
+            }
+          }
+
+          const content: LanguageModelV2Content[] = [{ type: "text", text }]
+          return {
+            content,
+            finishReason: "stop",
+            usage,
+            request: { body },
+            response: {
+              id: typeof parsed?.id === "string" ? parsed.id : undefined,
+              timestamp: new Date(Date.now()),
+              modelId: typeof parsed?.model === "string" ? parsed.model : this.modelId,
+              headers: headersToRecord(response.headers),
+              body: rawText,
+            },
+            providerMetadata: {} satisfies SharedV2ProviderMetadata,
+            warnings,
+          }
+        }
+
+        async doStream(
+          options: Parameters<CoreLanguageModelV2["doStream"]>[0],
+        ): Promise<Awaited<ReturnType<CoreLanguageModelV2["doStream"]>>> {
+          const warnings: LanguageModelV2CallWarning[] = []
+
+          const { response, body, shouldPromptToolCall } = await this.callOllama({
+            stream: true,
+            prompt: options.prompt,
+            headers: options.headers,
+            abortSignal: options.abortSignal,
+            temperature: (options as any).temperature,
+            topP: (options as any).topP,
+            maxOutputTokens: (options as any).maxOutputTokens,
+            tools: (options as any).tools,
+            toolChoice: (options as any).toolChoice,
+          })
+
+          if (!response.ok) {
+            const rawText = await response.text().catch(() => "")
+            throw new APICallError({
+              message: `Ollama request failed (${response.status})`,
+              url: response.url,
+              requestBodyValues: body,
+              statusCode: response.status,
+              responseHeaders: headersToRecord(response.headers),
+              responseBody: rawText,
+              isRetryable: response.status >= 500,
+            })
+          }
+
+          let currentTextId: string | null = null
+          let finishReason: LanguageModelV2FinishReason = "unknown"
+          const usage: LanguageModelV2Usage = { inputTokens: undefined, outputTokens: undefined, totalTokens: undefined }
+
+          const stream = new ReadableStream<LanguageModelV2StreamPart>({
+            async start(controller) {
+              controller.enqueue({ type: "stream-start", warnings })
+
+              const reader = response.body?.getReader()
+              if (!reader) {
+                finishReason = "error"
+                controller.enqueue({ type: "finish", finishReason, usage, providerMetadata: {} satisfies SharedV2ProviderMetadata })
+                controller.close()
+                return
+              }
+
+              const decoder = new TextDecoder()
+              let buffer = ""
+              let isDone = false
+              let fullText = ""
+
+              while (true) {
+                const { value, done } = await reader.read()
+                if (done) break
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split("\n")
+                buffer = lines.pop() ?? ""
+
+                for (const line of lines) {
+                  const trimmed = line.trim()
+                  if (!trimmed) continue
+                  if (options.includeRawChunks) controller.enqueue({ type: "raw", rawValue: trimmed })
+
+                  let chunk: any
+                  try {
+                    chunk = JSON.parse(trimmed)
+                  } catch (e) {
+                    finishReason = "error"
+                    controller.enqueue({ type: "error", error: e })
+                    continue
+                  }
+
+                  const delta: string | undefined =
+                    (chunk?.message && typeof chunk.message.content === "string" ? chunk.message.content : undefined) ??
+                    (typeof chunk?.response === "string" ? chunk.response : undefined)
+
+                  if (delta) {
+                    if (shouldPromptToolCall) {
+                      fullText += delta
+                    } else {
+                      if (!currentTextId) {
+                        currentTextId = "ollama-text"
+                        controller.enqueue({ type: "text-start", id: currentTextId, providerMetadata: {} })
+                      }
+                      controller.enqueue({ type: "text-delta", id: currentTextId, delta })
+                    }
+                  }
+
+                  if (chunk?.done === true) {
+                    isDone = true
+                    const inTok = typeof chunk?.prompt_eval_count === "number" ? chunk.prompt_eval_count : undefined
+                    const outTok = typeof chunk?.eval_count === "number" ? chunk.eval_count : undefined
+                    usage.inputTokens = inTok
+                    usage.outputTokens = outTok
+                    usage.totalTokens = typeof inTok === "number" && typeof outTok === "number" ? inTok + outTok : undefined
+                    break
+                  }
+                }
+
+                if (isDone) break
+              }
+
+              if (shouldPromptToolCall) {
+                const parsedToolCall = parsePromptToolCall(fullText)
+                if (parsedToolCall.kind === "tool") {
+                  finishReason = "tool-calls"
+                  for (const call of parsedToolCall.calls) {
+                    controller.enqueue({
+                      type: "tool-call",
+                      toolCallId: crypto.randomUUID(),
+                      toolName: call.name,
+                      input: JSON.stringify(call.arguments ?? {}),
+                      providerMetadata: {},
+                    } as any)
+                  }
+                } else {
+                  finishReason = "stop"
+                  currentTextId = "ollama-text"
+                  controller.enqueue({ type: "text-start", id: currentTextId, providerMetadata: {} })
+                  controller.enqueue({ type: "text-delta", id: currentTextId, delta: parsedToolCall.text })
+                  controller.enqueue({ type: "text-end", id: currentTextId })
+                  currentTextId = null
+                }
+              } else if (currentTextId) {
+                controller.enqueue({ type: "text-end", id: currentTextId })
+                currentTextId = null
+                finishReason = "stop"
+              } else {
+                finishReason = "stop"
+              }
+
+              controller.enqueue({ type: "finish", finishReason, usage, providerMetadata: {} satisfies SharedV2ProviderMetadata })
+              controller.close()
+            },
+          })
+
+          return {
+            stream,
+            request: { body },
+            response: { headers: headersToRecord(response.headers) },
+          }
+        }
+      }
+
+      return {
+        autoload: true,
+        options: {
+          baseURL,
+        },
+        async getModel(_sdk: any, modelID: string, options?: Record<string, any>) {
+          const cfgBaseURL = typeof options?.baseURL === "string" ? options.baseURL : baseURL
+          const cfgPromptToolCall =
+            options?.toolCallMode === "prompt" || options?.promptToolCall === true || options?.toolcall === "prompt" || promptToolCall
+          return new OllamaChatModel(modelID, { baseURL: cfgBaseURL, promptToolCall: cfgPromptToolCall })
+        },
+      }
+    },
     async anthropic() {
       return {
         autoload: false,
@@ -1070,6 +1644,45 @@ export namespace Provider {
             },
             cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
             limit: { context: 128000, output: 4096 },
+            status: "active",
+            options: {},
+            headers: {},
+            release_date: "2026-01-01",
+            variants: {},
+          },
+        },
+      }
+    }
+
+    if (!database["ollama"]) {
+      database["ollama"] = {
+        id: "ollama",
+        name: "Ollama",
+        source: "custom",
+        env: ["OLLAMA_BASE_URL", "OLLAMA_HOST"],
+        options: {},
+        models: {
+          "llama3.1:8b-instruct": {
+            id: "llama3.1:8b-instruct",
+            providerID: "ollama",
+            api: {
+              id: "llama3.1:8b-instruct",
+              url: "http://127.0.0.1:11434",
+              npm: "@ai-sdk/openai-compatible",
+            },
+            name: "llama3.1:8b-instruct",
+            family: "ollama",
+            capabilities: {
+              temperature: true,
+              reasoning: false,
+              attachment: false,
+              toolcall: false,
+              input: { text: true, audio: false, image: false, video: false, pdf: false },
+              output: { text: true, audio: false, image: false, video: false, pdf: false },
+              interleaved: false,
+            },
+            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+            limit: { context: 16384, output: 4096 },
             status: "active",
             options: {},
             headers: {},
