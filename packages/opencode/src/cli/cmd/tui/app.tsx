@@ -36,6 +36,7 @@ import { ArgsProvider, useArgs, type Args } from "./context/args"
 import open from "open"
 import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
+import { DialogPrompt } from "./ui/dialog-prompt"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -492,6 +493,76 @@ function App() {
       onSelect: (dialog) => {
         renderer.console.toggle()
         dialog.clear()
+      },
+    },
+    {
+      title: "Terminal",
+      category: "System",
+      value: "terminal.run",
+      onSelect: async (dialog) => {
+        const command = await DialogPrompt.show(dialog, "Terminal", {
+          placeholder: "Enter a shell command",
+        })
+        const trimmed = command?.trim()
+        if (!trimmed) {
+          dialog.clear()
+          return
+        }
+        if (trimmed.includes("\n")) {
+          toast.show({
+            variant: "warning",
+            message: "Only single-line commands are supported",
+            duration: 3000,
+          })
+          dialog.clear()
+          return
+        }
+
+        const selectedModel = local.model.current()
+        if (!selectedModel) {
+          toast.show({
+            variant: "warning",
+            message: "Select a model to run terminal commands",
+            duration: 3000,
+          })
+          if (sync.data.provider.length === 0) {
+            dialog.replace(() => <DialogProviderList />)
+          } else {
+            dialog.replace(() => <DialogModel />)
+          }
+          return
+        }
+
+        try {
+          const sessionID =
+            route.data.type === "session"
+              ? route.data.sessionID
+              : await sdk.client.session.create({}).then((x) => x.data!.id)
+
+          if (route.data.type !== "session") {
+            route.navigate({ type: "session", sessionID })
+          }
+
+          await sdk.client.session.shell({
+            sessionID,
+            agent: local.agent.current().name,
+            model: {
+              providerID: selectedModel.providerID,
+              modelID: selectedModel.modelID,
+            },
+            command: trimmed,
+          })
+
+          toast.show({
+            variant: "info",
+            message: `Running: ${trimmed}`,
+            duration: 3000,
+          })
+        } catch (error) {
+          toast.error(error)
+        } finally {
+          dialog.clear()
+        }
       },
     },
     {

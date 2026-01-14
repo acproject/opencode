@@ -25,6 +25,7 @@ import { Flag } from "@/flag/flag"
 import { Log } from "@/util/log"
 import { LspTool } from "./lsp"
 import { Truncate } from "./truncation"
+import { TerminalTool } from "./terminal"
 
 export namespace ToolRegistry {
   const log = Log.create({ service: "tool.registry" })
@@ -95,6 +96,7 @@ export namespace ToolRegistry {
       InvalidTool,
       ...(Flag.OPENCODE_CLIENT === "cli" ? [QuestionTool] : []),
       BashTool,
+      TerminalTool,
       ReadTool,
       GlobTool,
       GrepTool,

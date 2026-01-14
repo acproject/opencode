@@ -68,6 +68,7 @@ export namespace Pty {
     process: IPty
     buffer: string
     subscribers: Set<WSContext>
+    listeners: Set<(data: string) => void>
   }
 
   const state = Instance.state(
@@ -126,9 +127,15 @@ export namespace Pty {
       process: ptyProcess,
       buffer: "",
       subscribers: new Set(),
+      listeners: new Set(),
     }
     state().set(id, session)
     ptyProcess.onData((data) => {
+      for (const listener of session.listeners) {
+        try {
+          listener(data)
+        } catch {}
+      }
       let open = false
       for (const ws of session.subscribers) {
         if (ws.readyState !== 1) {
@@ -191,6 +198,15 @@ export namespace Pty {
     const session = state().get(id)
     if (session && session.info.status === "running") {
       session.process.write(data)
+    }
+  }
+
+  export function listen(id: string, listener: (data: string) => void) {
+    const session = state().get(id)
+    if (!session || session.info.status !== "running") return
+    session.listeners.add(listener)
+    return () => {
+      session.listeners.delete(listener)
     }
   }
 

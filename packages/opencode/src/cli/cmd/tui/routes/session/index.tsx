@@ -34,6 +34,7 @@ import type { Tool } from "@/tool/tool"
 import type { ReadTool } from "@/tool/read"
 import type { WriteTool } from "@/tool/write"
 import { BashTool } from "@/tool/bash"
+import { TerminalTool } from "@/tool/terminal"
 import type { GlobTool } from "@/tool/glob"
 import { TodoWriteTool } from "@/tool/todo"
 import type { GrepTool } from "@/tool/grep"
@@ -1342,6 +1343,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "bash"}>
           <Bash {...toolprops} />
         </Match>
+        <Match when={props.part.tool === "terminal"}>
+          <Terminal {...toolprops} />
+        </Match>
         <Match when={props.part.tool === "glob"}>
           <Glob {...toolprops} />
         </Match>
@@ -1553,6 +1557,52 @@ function Bash(props: ToolProps<typeof BashTool>) {
       </Match>
       <Match when={true}>
         <InlineTool icon="$" pending="Writing command..." complete={props.input.command} part={props.part}>
+          {props.input.command}
+        </InlineTool>
+      </Match>
+    </Switch>
+  )
+}
+
+function Terminal(props: ToolProps<typeof TerminalTool>) {
+  const { theme } = useTheme()
+  const output = createMemo(() => stripAnsi((props.metadata.output ?? props.output ?? "").trim()))
+  const [expanded, setExpanded] = createSignal(false)
+  const lines = createMemo(() => output().split("\n"))
+  const overflow = createMemo(() => lines().length > 10)
+  const limited = createMemo(() => {
+    if (expanded() || !overflow()) return output()
+    return [...lines().slice(0, 10), "…"].join("\n")
+  })
+  const status = createMemo(() => props.part.state.status)
+
+  return (
+    <Switch>
+      <Match when={status() !== "pending"}>
+        <BlockTool
+          title={"# Terminal"}
+          part={props.part}
+          onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
+        >
+          <box gap={1}>
+            <text fg={theme.text}>$ {props.input.command}</text>
+            <Show when={status() === "running"}>
+              <text fg={theme.textMuted}>Running…</text>
+            </Show>
+            <Show when={limited().length > 0}>
+              <text fg={theme.text}>{limited()}</text>
+            </Show>
+            <Show when={overflow()}>
+              <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
+            </Show>
+            <Show when={(props.metadata as any).timedOut === true}>
+              <text fg={theme.warning}>Timed out while capturing output</text>
+            </Show>
+          </box>
+        </BlockTool>
+      </Match>
+      <Match when={true}>
+        <InlineTool icon=">" pending="Starting terminal..." complete={props.input.command} part={props.part}>
           {props.input.command}
         </InlineTool>
       </Match>

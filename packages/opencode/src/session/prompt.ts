@@ -52,6 +52,12 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
   export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
+  const NON_TOOLCALL_TOOL_INSTRUCTIONS = [
+    "If you need to use a tool, output a fenced code block with language tool containing JSON only.",
+    'Format: {"tool":"<toolName>","args":{...}} or [{"tool":"...","args":{...}}, ...].',
+    'Example terminal: {"tool":"terminal","args":{"command":"ls -la"}}.',
+    'Example lsp: {"tool":"lsp","args":{"operation":"hover","filePath":"./src/index.ts","line":10,"character":5}}.',
+  ].join("\n")
 
   const state = Instance.state(
     () => {
@@ -594,7 +600,11 @@ export namespace SessionPrompt {
         agent,
         abort,
         sessionID,
-        system: [...(await SystemPrompt.environment()), ...(await SystemPrompt.custom())],
+        system: [
+          ...(await SystemPrompt.environment()),
+          ...(await SystemPrompt.custom()),
+          ...(model.capabilities.toolcall ? [] : [NON_TOOLCALL_TOOL_INSTRUCTIONS]),
+        ],
         messages: [
           ...MessageV2.toModelMessage(sessionMessages),
           ...(isLastStep
@@ -609,6 +619,27 @@ export namespace SessionPrompt {
         tools,
         model,
       })
+      const executedToolCalls = await maybeExecuteMarkdownToolCalls({
+        session,
+        agent,
+        model,
+        processor,
+        abort,
+        bypassAgentCheck,
+      })
+      const executed = await maybeExecuteMarkdownShellBlocks({
+        session,
+        agent,
+        model,
+        processor,
+        abort,
+        bypassAgentCheck,
+      })
+      if (executedToolCalls + executed > 0) {
+        if (result === "stop") {
+          continue
+        }
+      }
       if (result === "stop") break
       if (result === "compact") {
         await SessionCompaction.create({
@@ -813,6 +844,330 @@ export namespace SessionPrompt {
     }
 
     return tools
+  }
+
+  async function maybeExecuteMarkdownShellBlocks(input: {
+    session: Session.Info
+    agent: Agent.Info
+    model: Provider.Model
+    processor: SessionProcessor.Info
+    abort: AbortSignal
+    bypassAgentCheck: boolean
+  }) {
+    if (input.model.capabilities.toolcall) return 0
+
+    const parts = await MessageV2.parts(input.processor.message.id)
+    const text = parts
+      .filter((p): p is MessageV2.TextPart => p.type === "text")
+      .filter((p) => !p.ignored)
+      .map((p) => p.text)
+      .join("\n\n")
+    if (!text.trim()) return 0
+
+    const blocks = ConfigMarkdown.fencedCodeBlocks(text).filter((b) =>
+      ["bash", "sh", "shell", "zsh"].includes(b.lang),
+    )
+    if (blocks.length === 0) return 0
+
+    const commands = blocks
+      .map((b) => normalizeShellBlock(b.content))
+      .filter(Boolean)
+      .slice(0, 3)
+    if (commands.length === 0) return 0
+
+    const runtime = await ToolRuntime.current()
+    const toolInstances = await ToolRegistry.tools(input.model.providerID, input.agent)
+    const terminal = toolInstances.find((t) => t.id === "terminal")
+    if (!terminal) return 0
+
+    let executed = 0
+    for (const command of commands) {
+      input.abort.throwIfAborted()
+      const callID = ulid()
+      const args = { command } as const
+
+      let part = (await Session.updatePart({
+        id: Identifier.ascending("part"),
+        messageID: input.processor.message.id,
+        sessionID: input.session.id,
+        type: "tool",
+        tool: terminal.id,
+        callID,
+        state: {
+          status: "running",
+          input: args as any,
+          time: { start: Date.now() },
+        },
+      })) as MessageV2.ToolPart
+
+      const ctx: Tool.Context = {
+        sessionID: input.session.id,
+        abort: input.abort,
+        messageID: input.processor.message.id,
+        callID,
+        extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck },
+        agent: input.agent.name,
+        metadata: async (val) => {
+          if (part.state.status === "running") {
+            part = (await Session.updatePart({
+              ...part,
+              state: {
+                ...part.state,
+                title: val.title,
+                metadata: val.metadata,
+              },
+            })) as MessageV2.ToolPart
+          }
+        },
+        ask: async (req) => {
+          await PermissionNext.ask({
+            ...req,
+            sessionID: input.session.id,
+            tool: { messageID: input.processor.message.id, callID },
+            ruleset: PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
+          })
+        },
+      }
+
+      try {
+        await Plugin.trigger(
+          "tool.execute.before",
+          { tool: terminal.id, sessionID: ctx.sessionID, callID: ctx.callID },
+          { args },
+        )
+        const result = await runtime.execute({ tool: terminal, args, ctx })
+        await Plugin.trigger("tool.execute.after", { tool: terminal.id, sessionID: ctx.sessionID, callID }, result)
+        if (part.state.status === "running") {
+          part = (await Session.updatePart({
+            ...part,
+            state: {
+              status: "completed",
+              input: args as any,
+              output: result.output,
+              metadata: result.metadata,
+              title: result.title,
+              time: {
+                start: part.state.time.start,
+                end: Date.now(),
+              },
+              attachments: result.attachments,
+            },
+          })) as MessageV2.ToolPart
+        }
+        executed++
+      } catch (e: any) {
+        if (part.state.status === "running") {
+          part = (await Session.updatePart({
+            ...part,
+            state: {
+              status: "error",
+              input: args as any,
+              error: (e as any).toString(),
+              time: {
+                start: part.state.time.start,
+                end: Date.now(),
+              },
+            },
+          })) as MessageV2.ToolPart
+        }
+      }
+    }
+
+    return executed
+  }
+
+  async function maybeExecuteMarkdownToolCalls(input: {
+    session: Session.Info
+    agent: Agent.Info
+    model: Provider.Model
+    processor: SessionProcessor.Info
+    abort: AbortSignal
+    bypassAgentCheck: boolean
+  }) {
+    if (input.model.capabilities.toolcall) return 0
+
+    const parts = await MessageV2.parts(input.processor.message.id)
+    const text = parts
+      .filter((p): p is MessageV2.TextPart => p.type === "text")
+      .filter((p) => !p.ignored)
+      .map((p) => p.text)
+      .join("\n\n")
+    if (!text.trim()) return 0
+
+    const blocks = ConfigMarkdown.fencedCodeBlocks(text).filter((b) => b.lang === "tool")
+    const callsFromBlocks = blocks.flatMap((b) => parseToolJson(b.content))
+    const callsFromWholeText = parseToolJson(text)
+    const calls = [...callsFromBlocks, ...callsFromWholeText].slice(0, 5)
+
+    if (calls.length === 0) return 0
+
+    const runtime = await ToolRuntime.current()
+    const toolInstances = await ToolRegistry.tools(input.model.providerID, input.agent)
+
+    let executed = 0
+    for (const call of calls) {
+      input.abort.throwIfAborted()
+      const tool = toolInstances.find((t) => t.id === call.tool)
+      const callID = ulid()
+
+      if (!tool) {
+        await Session.updatePart({
+          id: Identifier.ascending("part"),
+          messageID: input.processor.message.id,
+          sessionID: input.session.id,
+          type: "tool",
+          tool: call.tool,
+          callID,
+          state: {
+            status: "error",
+            input: (call.args ?? {}) as any,
+            error: `Unknown tool: ${call.tool}`,
+            time: {
+              start: Date.now(),
+              end: Date.now(),
+            },
+          },
+        })
+        continue
+      }
+
+      let part = (await Session.updatePart({
+        id: Identifier.ascending("part"),
+        messageID: input.processor.message.id,
+        sessionID: input.session.id,
+        type: "tool",
+        tool: tool.id,
+        callID,
+        state: {
+          status: "running",
+          input: (call.args ?? {}) as any,
+          time: { start: Date.now() },
+        },
+      })) as MessageV2.ToolPart
+
+      const ctx: Tool.Context = {
+        sessionID: input.session.id,
+        abort: input.abort,
+        messageID: input.processor.message.id,
+        callID,
+        extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck },
+        agent: input.agent.name,
+        metadata: async (val) => {
+          if (part.state.status === "running") {
+            part = (await Session.updatePart({
+              ...part,
+              state: {
+                ...part.state,
+                title: val.title,
+                metadata: val.metadata,
+              },
+            })) as MessageV2.ToolPart
+          }
+        },
+        ask: async (req) => {
+          await PermissionNext.ask({
+            ...req,
+            sessionID: input.session.id,
+            tool: { messageID: input.processor.message.id, callID },
+            ruleset: PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
+          })
+        },
+      }
+
+      try {
+        await Plugin.trigger(
+          "tool.execute.before",
+          { tool: tool.id, sessionID: ctx.sessionID, callID: ctx.callID },
+          { args: call.args ?? {} },
+        )
+        const result = await runtime.execute({ tool, args: (call.args ?? {}) as any, ctx })
+        await Plugin.trigger("tool.execute.after", { tool: tool.id, sessionID: ctx.sessionID, callID }, result)
+        if (part.state.status === "running") {
+          part = (await Session.updatePart({
+            ...part,
+            state: {
+              status: "completed",
+              input: (call.args ?? {}) as any,
+              output: result.output,
+              metadata: result.metadata,
+              title: result.title,
+              time: {
+                start: part.state.time.start,
+                end: Date.now(),
+              },
+              attachments: result.attachments,
+            },
+          })) as MessageV2.ToolPart
+        }
+        executed++
+      } catch (e: any) {
+        if (part.state.status === "running") {
+          part = (await Session.updatePart({
+            ...part,
+            state: {
+              status: "error",
+              input: (call.args ?? {}) as any,
+              error: (e as any).toString(),
+              time: {
+                start: part.state.time.start,
+                end: Date.now(),
+              },
+            },
+          })) as MessageV2.ToolPart
+        }
+      }
+    }
+
+    return executed
+  }
+
+  function parseToolJson(content: string): { tool: string; args: Record<string, any> }[] {
+    const trimmed = content.trim()
+    if (!trimmed) return []
+    if (trimmed.length > 50_000) return []
+
+    const jsonText = trimmed.replace(/^```(?:tool|json)?\s*/i, "").replace(/```$/, "").trim()
+    const first = jsonText[0]
+    const last = jsonText[jsonText.length - 1]
+    const looksLikeWholeJson =
+      (first === "{" && last === "}") || (first === "[" && last === "]")
+    if (!looksLikeWholeJson) return []
+    let parsed: any
+    try {
+      parsed = JSON.parse(jsonText)
+    } catch {
+      return []
+    }
+
+    const items = Array.isArray(parsed) ? parsed : [parsed]
+    const calls: { tool: string; args: Record<string, any> }[] = []
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue
+      const tool = item.tool ?? item.name ?? item.toolName
+      if (typeof tool !== "string" || tool.trim().length === 0) continue
+      const args =
+        item.args ??
+        item.input ??
+        item.parameters ??
+        (tool === "terminal" && typeof item.command === "string"
+          ? { command: item.command }
+          : undefined) ??
+        {}
+      if (!args || typeof args !== "object") continue
+      calls.push({ tool, args })
+    }
+    return calls
+  }
+
+  function normalizeShellBlock(content: string) {
+    const lines = content
+      .split("\n")
+      .map((l) => l.replace(/^\$\s*/, ""))
+      .filter((l) => l.trim().length > 0)
+    const text = lines.join("\n").trim()
+    if (!text) return
+    if (text.length > 10_000) return
+    return text
   }
 
   async function createUserMessage(input: PromptInput) {

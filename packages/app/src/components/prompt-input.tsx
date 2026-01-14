@@ -56,6 +56,22 @@ import { base64Encode } from "@opencode-ai/util/encode"
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"]
 const ACCEPTED_FILE_TYPES = [...ACCEPTED_IMAGE_TYPES, "application/pdf"]
 
+const SHELL_COMMAND_START = /^(ls|pwd|git|npm|pnpm|yarn|bunx?|node|python3?|rg|grep|find|cat|head|tail|sed|awk|make|cargo|go|docker|kubectl|helm|terraform)(\s|$)/i
+const CJK_CHAR = /[\u3040-\u30ff\u3400-\u9fff]/i
+
+const normalizeShellCommand = (text: string): string | undefined => {
+  const trimmed = text.trim()
+  if (!trimmed) return
+  if (trimmed.includes("\n")) return
+  if (trimmed.startsWith("/")) return
+  if (/[?？]/.test(trimmed)) return
+  if (CJK_CHAR.test(trimmed)) return
+
+  const normalized = trimmed.replace(/^\$\s*/, "")
+  if (!SHELL_COMMAND_START.test(normalized)) return
+  return normalized
+}
+
 interface PromptInputProps {
   class?: string
   ref?: (el: HTMLDivElement) => void
@@ -963,6 +979,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
     const images = imageAttachments().slice()
     const mode = store.mode
+    const normalizedShellCommand = mode === "normal" && images.length === 0 ? normalizeShellCommand(text) : undefined
+    const submitMode = normalizedShellCommand ? "shell" : mode
 
     if (text.trim().length === 0 && images.length === 0) {
       if (working()) abort()
@@ -988,7 +1006,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       return "Request failed"
     }
 
-    addToHistory(currentPrompt, mode)
+    addToHistory(currentPrompt, submitMode)
     setStore("historyIndex", -1)
     setStore("savedPrompt", null)
 
@@ -1070,14 +1088,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       })
     }
 
-    if (mode === "shell") {
+    if (submitMode === "shell") {
       clearInput()
       client.session
         .shell({
           sessionID: session.id,
           agent,
           model,
-          command: text,
+          command: normalizedShellCommand ?? text,
         })
         .catch((err) => {
           showToast({

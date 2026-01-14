@@ -22,6 +22,23 @@ const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 
 
 export const log = Log.create({ service: "bash-tool" })
 
+const deriveDescription = (command: string) => {
+  const head = command.trim().split(/\s+/).filter(Boolean)[0] || "command"
+  const verb = head.toLowerCase()
+  if (verb === "ls") return "Lists files in directory"
+  if (verb === "git") return "Runs a git command"
+  if (verb === "npm") return "Runs an npm command"
+  if (verb === "pnpm") return "Runs a pnpm command"
+  if (verb === "yarn") return "Runs a yarn command"
+  if (verb === "bun") return "Runs a bun command"
+  if (verb === "node") return "Runs a node script"
+  if (verb === "python" || verb === "python3") return "Runs a python script"
+  if (verb === "docker") return "Runs a docker command"
+  if (verb === "kubectl") return "Runs a kubectl command"
+  if (verb === "make") return "Runs a make target"
+  return `Runs shell command: ${head}`
+}
+
 const resolveWasm = (asset: string) => {
   if (asset.startsWith("file://")) return fileURLToPath(asset)
   if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
@@ -83,10 +100,7 @@ export const BashTool = Tool.define("bash", async () => {
         throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
       }
       const timeout = params.timeout ?? DEFAULT_TIMEOUT
-      const description = params.description ?? params.interpretation ?? ""
-      if (!description) {
-        throw new Error("Missing required field: description")
-      }
+      const description = (params.description ?? params.interpretation ?? "").trim() || deriveDescription(params.command)
 
       const tree = await parser().then((p) => p.parse(params.command))
       if (!tree) {

@@ -20,7 +20,10 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
   await fs.mkdir(dirpath, { recursive: true })
   if (options?.git) {
     await $`git init`.cwd(dirpath).quiet()
-    await $`git commit --allow-empty -m "root commit ${dirpath}"`.cwd(dirpath).quiet()
+    await $`git config user.email "test@opencode.ai"`.cwd(dirpath).quiet()
+    await $`git config user.name "opencode-test"`.cwd(dirpath).quiet()
+    await $`git config commit.gpgSign false`.cwd(dirpath).quiet()
+    await $`git commit --no-gpg-sign --allow-empty -m "root commit ${dirpath}"`.cwd(dirpath).quiet()
   }
   if (options?.config) {
     await Bun.write(

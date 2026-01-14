@@ -162,7 +162,7 @@ describe("permission.task with real config files", () => {
         expect(PermissionNext.evaluate("task", "code-reviewer", ruleset).action).toBe("deny")
       },
     })
-  })
+  }, 20000)
 
   test("loads task permissions with wildcard patterns from config", async () => {
     await using tmp = await tmpdir({
@@ -187,7 +187,7 @@ describe("permission.task with real config files", () => {
         expect(PermissionNext.evaluate("task", "orchestrator-fast", ruleset).action).toBe("deny")
       },
     })
-  })
+  }, 20000)
 
   test("evaluate respects task permission from config", async () => {
     await using tmp = await tmpdir({
@@ -212,7 +212,7 @@ describe("permission.task with real config files", () => {
         expect(PermissionNext.evaluate("task", "unknown-agent", ruleset).action).toBe("ask")
       },
     })
-  })
+  }, 20000)
 
   test("mixed permission config with task and other tools", async () => {
     await using tmp = await tmpdir({

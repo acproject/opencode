@@ -36,6 +36,24 @@ describe("tool.bash", () => {
       },
     })
   })
+
+  test("derives description when missing", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const bash = await BashTool.init()
+        const result = await bash.execute(
+          {
+            command: "echo 'test'",
+          },
+          ctx,
+        )
+        expect((result.metadata as any).description).toBe("Runs shell command: echo")
+        expect(result.metadata.exit).toBe(0)
+        expect(result.metadata.output).toContain("test")
+      },
+    })
+  })
 })
 
 describe("tool.bash permissions", () => {

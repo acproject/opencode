@@ -87,3 +87,24 @@ test("should not match email addresses", () => {
   const emailMatches = ConfigMarkdown.files(emailTest)
   expect(emailMatches.length).toBe(0)
 })
+
+test("should extract fenced bash code blocks", () => {
+  const md = [
+    "text",
+    "```bash",
+    "ls -la",
+    "```",
+    "",
+    "```ts",
+    "console.log('x')",
+    "```",
+    "",
+    "```sh",
+    "echo hello",
+    "```",
+  ].join("\n")
+  const blocks = ConfigMarkdown.fencedCodeBlocks(md)
+  expect(blocks.map((b) => b.lang)).toEqual(["bash", "ts", "sh"])
+  expect(blocks[0]?.content).toBe("ls -la")
+  expect(blocks[2]?.content).toBe("echo hello")
+})

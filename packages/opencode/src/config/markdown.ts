@@ -5,6 +5,7 @@ import { z } from "zod"
 export namespace ConfigMarkdown {
   export const FILE_REGEX = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g
   export const SHELL_REGEX = /!`([^`]+)`/g
+  export const FENCED_CODE_BLOCK_REGEX = /```([^\n`]*)\n([\s\S]*?)\n```/g
 
   export function files(template: string) {
     return Array.from(template.matchAll(FILE_REGEX))
@@ -12,6 +13,15 @@ export namespace ConfigMarkdown {
 
   export function shell(template: string) {
     return Array.from(template.matchAll(SHELL_REGEX))
+  }
+
+  export function fencedCodeBlocks(template: string) {
+    return Array.from(template.matchAll(FENCED_CODE_BLOCK_REGEX)).map((m) => {
+      const rawLang = (m[1] ?? "").trim()
+      const lang = rawLang.split(/\s+/)[0]?.toLowerCase() ?? ""
+      const content = (m[2] ?? "").trimEnd()
+      return { lang, rawLang, content }
+    })
   }
 
   export async function parse(filePath: string) {

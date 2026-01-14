@@ -53,6 +53,22 @@ export type PromptRef = {
 
 const PLACEHOLDERS = ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"]
 
+const SHELL_COMMAND_START = /^(ls|pwd|git|npm|pnpm|yarn|bunx?|node|python3?|rg|grep|find|cat|head|tail|sed|awk|make|cargo|go|docker|kubectl|helm|terraform)(\s|$)/i
+const CJK_CHAR = /[\u3040-\u30ff\u3400-\u9fff]/i
+
+function normalizeShellCommand(text: string): string | undefined {
+  const trimmed = text.trim()
+  if (!trimmed) return
+  if (trimmed.includes("\n")) return
+  if (trimmed.startsWith("/")) return
+  if (/[?？]/.test(trimmed)) return
+  if (CJK_CHAR.test(trimmed)) return
+
+  const normalized = trimmed.replace(/^\$\s*/, "")
+  if (!SHELL_COMMAND_START.test(normalized)) return
+  return normalized
+}
+
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
@@ -528,10 +544,12 @@ export function Prompt(props: PromptProps) {
     const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
 
     // Capture mode before it gets reset
-    const currentMode = store.mode
+    const normalizedShellCommand = store.mode === "normal" ? normalizeShellCommand(inputText) : undefined
+    const submitMode = normalizedShellCommand ? "shell" : store.mode
+    const currentMode = submitMode
     const variant = local.model.variant.current()
 
-    if (store.mode === "shell") {
+    if (submitMode === "shell") {
       sdk.client.session.shell({
         sessionID,
         agent: local.agent.current().name,
@@ -539,9 +557,9 @@ export function Prompt(props: PromptProps) {
           providerID: selectedModel.providerID,
           modelID: selectedModel.modelID,
         },
-        command: inputText,
+        command: normalizedShellCommand ?? inputText,
       })
-      setStore("mode", "normal")
+      if (store.mode === "shell") setStore("mode", "normal")
     } else if (
       inputText.startsWith("/") &&
       iife(() => {
