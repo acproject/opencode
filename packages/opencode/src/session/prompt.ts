@@ -880,11 +880,12 @@ export namespace SessionPrompt {
     const terminal = toolInstances.find((t) => t.id === "terminal")
     if (!terminal) return 0
 
+    let lastPtyID = await findLastTerminalPtyID(input.session.id)
     let executed = 0
     for (const command of commands) {
       input.abort.throwIfAborted()
       const callID = ulid()
-      const args = { command } as const
+      const args = { command, ...(lastPtyID ? { ptyID: lastPtyID } : {}) }
 
       let part = (await Session.updatePart({
         id: Identifier.ascending("part"),
@@ -954,6 +955,8 @@ export namespace SessionPrompt {
             },
           })) as MessageV2.ToolPart
         }
+        const next = (result as any)?.metadata?.ptyID
+        if (typeof next === "string" && next.trim().length > 0) lastPtyID = next
         executed++
       } catch (e: any) {
         if (part.state.status === "running") {
@@ -1004,6 +1007,7 @@ export namespace SessionPrompt {
     const runtime = await ToolRuntime.current()
     const toolInstances = await ToolRegistry.tools(input.model.providerID, input.agent)
 
+    let lastPtyID = await findLastTerminalPtyID(input.session.id)
     let executed = 0
     for (const call of calls) {
       input.abort.throwIfAborted()
@@ -1031,6 +1035,11 @@ export namespace SessionPrompt {
         continue
       }
 
+      const args = { ...(call.args ?? {}) } as Record<string, any>
+      if (tool.id === "terminal" && args.ptyID === undefined && lastPtyID) {
+        args.ptyID = lastPtyID
+      }
+
       let part = (await Session.updatePart({
         id: Identifier.ascending("part"),
         messageID: input.processor.message.id,
@@ -1040,7 +1049,7 @@ export namespace SessionPrompt {
         callID,
         state: {
           status: "running",
-          input: (call.args ?? {}) as any,
+          input: args as any,
           time: { start: Date.now() },
         },
       })) as MessageV2.ToolPart
@@ -1078,16 +1087,16 @@ export namespace SessionPrompt {
         await Plugin.trigger(
           "tool.execute.before",
           { tool: tool.id, sessionID: ctx.sessionID, callID: ctx.callID },
-          { args: call.args ?? {} },
+          { args },
         )
-        const result = await runtime.execute({ tool, args: (call.args ?? {}) as any, ctx })
+        const result = await runtime.execute({ tool, args: args as any, ctx })
         await Plugin.trigger("tool.execute.after", { tool: tool.id, sessionID: ctx.sessionID, callID }, result)
         if (part.state.status === "running") {
           part = (await Session.updatePart({
             ...part,
             state: {
               status: "completed",
-              input: (call.args ?? {}) as any,
+              input: args as any,
               output: result.output,
               metadata: result.metadata,
               title: result.title,
@@ -1099,6 +1108,10 @@ export namespace SessionPrompt {
             },
           })) as MessageV2.ToolPart
         }
+        if (tool.id === "terminal") {
+          const next = (result as any)?.metadata?.ptyID
+          if (typeof next === "string" && next.trim().length > 0) lastPtyID = next
+        }
         executed++
       } catch (e: any) {
         if (part.state.status === "running") {
@@ -1106,7 +1119,7 @@ export namespace SessionPrompt {
             ...part,
             state: {
               status: "error",
-              input: (call.args ?? {}) as any,
+              input: args as any,
               error: (e as any).toString(),
               time: {
                 start: part.state.time.start,
@@ -1119,6 +1132,21 @@ export namespace SessionPrompt {
     }
 
     return executed
+  }
+
+  async function findLastTerminalPtyID(sessionID: string) {
+    const msgs = await Session.messages({ sessionID, limit: 25 })
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const msg = msgs[i]
+      for (let j = msg.parts.length - 1; j >= 0; j--) {
+        const part = msg.parts[j]
+        if (part.type !== "tool") continue
+        if (part.tool !== "terminal") continue
+        if (part.state.status !== "completed") continue
+        const id = (part.state as any)?.metadata?.ptyID
+        if (typeof id === "string" && id.trim().length > 0) return id
+      }
+    }
   }
 
   function parseToolJson(content: string): { tool: string; args: Record<string, any> }[] {
