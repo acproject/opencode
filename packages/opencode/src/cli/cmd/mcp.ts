@@ -53,6 +53,7 @@ export const McpCommand = cmd({
   describe: "manage MCP (Model Context Protocol) servers",
   builder: (yargs) =>
     yargs
+      .command(McpStartCommand)
       .command(McpAddCommand)
       .command(McpListCommand)
       .command(McpAuthCommand)
@@ -60,6 +61,35 @@ export const McpCommand = cmd({
       .command(McpDebugCommand)
       .demandCommand(),
   async handler() {},
+})
+
+export const McpStartCommand = cmd({
+  command: "start",
+  describe: "start opencode as an MCP server over stdio",
+  builder: (yargs) =>
+    yargs
+      .option("provider", {
+        type: "string",
+        default: "opencode",
+        describe: "tool provider ID",
+      })
+      .option("directory", {
+        type: "string",
+        describe: "project directory to serve tools for",
+      }),
+  async handler(args) {
+    if (process.stderr.isTTY) {
+      console.error("Starting OpenCode MCP server over stdio")
+      console.error("This process stays running until the client disconnects")
+      console.error('Note: MCP stdio is non-interactive; configure opencode.json "permission" to allow tools')
+    }
+    await Instance.provide({
+      directory: args.directory ?? process.cwd(),
+      async fn() {
+        await MCP.startLocalServer({ provider: args.provider })
+      },
+    })
+  },
 })
 
 export const McpListCommand = cmd({

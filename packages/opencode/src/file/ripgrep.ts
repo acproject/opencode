@@ -205,6 +205,17 @@ export namespace Ripgrep {
     return filepath
   }
 
+  export async function filepathIfAvailable() {
+    const fromPath = Bun.which("rg")
+    if (fromPath) return fromPath
+    const candidate = path.join(Global.Path.bin, "rg" + (process.platform === "win32" ? ".exe" : ""))
+    const exists = await fs
+      .stat(candidate)
+      .then((s) => s.isFile())
+      .catch(() => false)
+    return exists ? candidate : null
+  }
+
   export async function* files(input: {
     cwd: string
     glob?: string[]

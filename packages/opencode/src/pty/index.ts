@@ -69,6 +69,7 @@ export namespace Pty {
     buffer: string
     subscribers: Set<WSContext>
     listeners: Set<(data: string) => void>
+    cwdPinned: boolean
   }
 
   const state = Instance.state(
@@ -128,6 +129,7 @@ export namespace Pty {
       buffer: "",
       subscribers: new Set(),
       listeners: new Set(),
+      cwdPinned: Boolean(input.cwd),
     }
     state().set(id, session)
     ptyProcess.onData((data) => {
@@ -210,7 +212,28 @@ export namespace Pty {
     }
   }
 
-  export function connect(id: string, ws: WSContext) {
+  function detectShellKind(shellPath: string) {
+    const s = shellPath.toLowerCase()
+    if (s.includes("powershell") || s.endsWith("pwsh")) return "powershell"
+    if (s.endsWith("cmd.exe") || s.endsWith("\\cmd") || s.endsWith("/cmd")) return "cmd"
+    return "posix"
+  }
+
+  function posixQuote(value: string) {
+    return `'${value.replace(/'/g, `'\"'\"'`)}'`
+  }
+
+  function powershellQuote(value: string) {
+    return `'${value.replace(/'/g, "''")}'`
+  }
+
+  function buildCwdCommand(shell: "posix" | "cmd" | "powershell", cwd: string) {
+    if (shell === "cmd") return `cd /d "${cwd.replaceAll(`"`, `""`)}"\r\n`
+    if (shell === "powershell") return `Set-Location -LiteralPath ${powershellQuote(cwd)}\r\n`
+    return `cd -- ${posixQuote(cwd)}\r`
+  }
+
+  export function connect(id: string, ws: WSContext, options?: { directory?: string }) {
     const session = state().get(id)
     if (!session) {
       ws.close()
@@ -218,6 +241,18 @@ export namespace Pty {
     }
     log.info("client connected to session", { id })
     session.subscribers.add(ws)
+
+    const directory = options?.directory?.trim()
+    if (directory && !session.cwdPinned) {
+      session.cwdPinned = true
+      if (directory !== session.info.cwd) {
+        session.info.cwd = directory
+        Bus.publish(Event.Updated, { info: session.info })
+        const shell = detectShellKind(session.info.command)
+        session.process.write(buildCwdCommand(shell, directory))
+      }
+    }
+
     if (session.buffer) {
       const buffer = session.buffer.length <= BUFFER_LIMIT ? session.buffer : session.buffer.slice(-BUFFER_LIMIT)
       session.buffer = ""

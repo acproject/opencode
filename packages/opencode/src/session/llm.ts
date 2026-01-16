@@ -7,6 +7,7 @@ import {
   wrapLanguageModel,
   type ModelMessage,
   type StreamTextResult,
+  type StopCondition,
   type Tool,
   type ToolSet,
   extractReasoningMiddleware,
@@ -39,6 +40,14 @@ export namespace LLM {
     small?: boolean
     tools: Record<string, Tool>
     retries?: number
+    orchestrator?: {
+      maxSteps?: number
+      stopWhen?: StopCondition<any> | StopCondition<any>[]
+    }
+    step?: {
+      current: number
+      max: number
+    }
   }
 
   export type StreamOutput = StreamTextResult<ToolSet, unknown>
@@ -140,7 +149,7 @@ export namespace LLM {
       activeToolCount: Object.keys(tools).filter((x) => x !== "invalid").length,
     })
 
-    return streamText({
+    const baseArgs: Parameters<typeof streamText>[0] = {
       onError(error) {
         l.error("stream error", {
           error,
@@ -226,7 +235,12 @@ export namespace LLM {
         ],
       }),
       experimental_telemetry: { isEnabled: cfg.experimental?.openTelemetry },
-    })
+    }
+    return streamText({
+      ...baseArgs,
+      ...(input.orchestrator?.maxSteps !== undefined ? { maxSteps: input.orchestrator.maxSteps } : {}),
+      ...(input.orchestrator?.stopWhen !== undefined ? { stopWhen: input.orchestrator.stopWhen } : {}),
+    } as any)
   }
 
   async function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "user">) {

@@ -1,9 +1,11 @@
-import { dynamicTool, type Tool, jsonSchema, type JSONSchema7 } from "ai"
+import { dynamicTool, type Tool as AiTool, jsonSchema, type JSONSchema7 } from "ai"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolResultSchema,
   type Tool as MCPToolDef,
@@ -23,6 +25,15 @@ import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import open from "open"
+import { ToolRegistry } from "@/tool/registry"
+import { Tool as OcTool } from "@/tool/tool"
+import { PermissionNext } from "@/permission/next"
+import { Identifier } from "@/id/id"
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js"
+import type { CallToolResult, ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js"
+import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js"
+import path from "path"
+import { Filesystem } from "@/util/filesystem"
 
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
@@ -109,7 +120,7 @@ export namespace MCP {
   }
 
   // Convert MCP tool definition to AI SDK Tool type
-  async function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient): Promise<Tool> {
+  async function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient): Promise<AiTool> {
     const inputSchema = mcpTool.inputSchema
 
     // Spread first, then override type to ensure it's always "object"
@@ -540,7 +551,7 @@ export namespace MCP {
   }
 
   export async function tools() {
-    const result: Record<string, Tool> = {}
+    const result: Record<string, AiTool> = {}
     const s = await state()
     const clientsSnapshot = await clients()
 
@@ -570,6 +581,193 @@ export namespace MCP {
       }
     }
     return result
+  }
+
+  export async function startLocalServer(input?: { provider?: string }) {
+    const provider = input?.provider ?? "opencode"
+    const tools = (await ToolRegistry.tools(provider)).filter((t) => t.id !== "question")
+
+    const server = new McpServer(
+      {
+        name: "opencode",
+        version: Installation.VERSION,
+      },
+      {
+        capabilities: {
+          logging: {},
+        },
+      },
+    )
+
+    const sessionMap = new Map<string, string>()
+
+    function toCamelCaseKey(key: string) {
+      let out = ""
+      let nextUpper = false
+      for (let i = 0; i < key.length; i++) {
+        const ch = key[i]
+        if (ch === "_") {
+          nextUpper = true
+          continue
+        }
+        if (nextUpper) {
+          out += ch.toUpperCase()
+          nextUpper = false
+          continue
+        }
+        out += ch
+      }
+      return out
+    }
+
+    function normalizeArgs(args: unknown) {
+      if (!args || typeof args !== "object" || Array.isArray(args)) return args
+      const input = args as Record<string, unknown>
+      const out: Record<string, unknown> = { ...input }
+      for (const [key, value] of Object.entries(input)) {
+        if (!key.includes("_")) continue
+        const camel = toCamelCaseKey(key)
+        if (!(camel in out)) out[camel] = value
+        if (camel.endsWith("Id")) {
+          const withAcronym = camel.slice(0, -2) + "ID"
+          if (!(withAcronym in out)) out[withAcronym] = value
+        }
+      }
+      return out
+    }
+
+    for (const tool of tools) {
+      server.registerTool(
+        tool.id,
+        {
+          description: tool.description,
+          inputSchema: tool.parameters as unknown as AnySchema,
+        },
+        async (args: unknown, extra: RequestHandlerExtra<ServerRequest, ServerNotification>): Promise<CallToolResult> => {
+          const rawSessionID = typeof extra.sessionId === "string" ? extra.sessionId : "default"
+          const sessionID = sessionMap.get(rawSessionID) ?? Identifier.ascending("session")
+          sessionMap.set(rawSessionID, sessionID)
+
+          const messageID = Identifier.ascending("message")
+          const callID = Identifier.ascending("tool")
+
+          let lastTitle: string | undefined
+          let lastMetadata: Record<string, unknown> | undefined
+
+          const ctx: OcTool.Context = {
+            sessionID,
+            messageID,
+            agent: "mcp",
+            abort: extra.signal,
+            callID,
+            metadata(input) {
+              if (input.title !== undefined) lastTitle = input.title
+              if (input.metadata !== undefined) lastMetadata = input.metadata as Record<string, unknown>
+
+              if (input.title) {
+                server
+                  .sendLoggingMessage(
+                    {
+                      level: "info",
+                      data: input.title,
+                    },
+                    rawSessionID === "default" ? undefined : rawSessionID,
+                  )
+                  .catch(() => {})
+              }
+            },
+            async ask(request) {
+              if (request.permission === "read") {
+                const patterns = request.patterns ?? []
+                const allowed = patterns.every((p) => Filesystem.contains(Instance.directory, p))
+                if (allowed) return
+              }
+
+              if (request.permission === "glob" || request.permission === "grep") {
+                const metaPath = typeof request.metadata?.path === "string" ? request.metadata.path : undefined
+                const resolved = metaPath
+                  ? path.isAbsolute(metaPath)
+                    ? metaPath
+                    : path.resolve(Instance.directory, metaPath)
+                  : Instance.directory
+                if (Filesystem.contains(Instance.directory, resolved)) return
+              }
+
+              if (request.permission === "edit") {
+                const patterns = request.patterns ?? []
+                const allowed = patterns.every((p) => {
+                  const resolved = path.isAbsolute(p) ? p : path.resolve(Instance.worktree, p)
+                  return Filesystem.contains(Instance.directory, resolved)
+                })
+                if (allowed) return
+              }
+
+              const cfg = await Config.get()
+              const configured = PermissionNext.fromConfig(cfg.permission ?? {})
+              const ruleset = [{ permission: "*", pattern: "*", action: "deny" as const }, ...configured]
+
+              for (const pattern of request.patterns ?? []) {
+                const rule = PermissionNext.evaluate(request.permission, pattern, ruleset)
+                if (rule.action === "allow") continue
+                if (rule.action === "deny") {
+                  throw new Error(
+                    `Permission denied for ${request.permission} (${pattern}). Configure opencode.json "permission" to allow it before using this tool via MCP.`,
+                  )
+                }
+                throw new Error(
+                  `Permission prompt required for ${request.permission} (${pattern}), but MCP stdio server is non-interactive. Configure opencode.json "permission" to allow it before using this tool via MCP.`,
+                )
+              }
+            },
+          }
+
+          try {
+            const normalized = normalizeArgs(args)
+            const result = await tool.execute(normalized as never, ctx)
+
+            if (lastTitle || lastMetadata) {
+              server
+                .sendLoggingMessage(
+                  {
+                    level: "debug",
+                    data: JSON.stringify({ title: lastTitle, metadata: lastMetadata }),
+                  },
+                  rawSessionID === "default" ? undefined : rawSessionID,
+                )
+                .catch(() => {})
+            }
+
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: result.output ?? "",
+                },
+              ],
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            log.error("mcp tool call failed", { tool: tool.id, error: message })
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text" as const,
+                  text: message,
+                },
+              ],
+            }
+          }
+        },
+      )
+    }
+
+    const transport = new StdioServerTransport()
+    await server.connect(transport)
+
+    await new Promise<void>((resolve) => {
+      transport.onclose = () => resolve()
+    })
   }
 
   export async function prompts() {

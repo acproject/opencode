@@ -43,7 +43,7 @@ function createTerminalSession(sdk: ReturnType<typeof useSDK>, dir: string, id: 
     active: createMemo(() => store.active),
     new() {
       sdk.client.pty
-        .create({ title: `Terminal ${store.all.length + 1}` })
+        .create({ title: `Terminal ${store.all.length + 1}`, cwd: sdk.directory })
         .then((pty) => {
           const id = pty.data?.id
           if (!id) return
@@ -79,6 +79,7 @@ function createTerminalSession(sdk: ReturnType<typeof useSDK>, dir: string, id: 
       const clone = await sdk.client.pty
         .create({
           title: pty.title,
+          cwd: sdk.directory,
         })
         .catch((e) => {
           console.error("Failed to clone terminal", e)

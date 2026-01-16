@@ -623,11 +623,12 @@ export namespace Server {
           validator("param", z.object({ ptyID: z.string() })),
           upgradeWebSocket((c) => {
             const id = c.req.param("ptyID")
+            const directory = c.req.query("directory")
             let handler: ReturnType<typeof Pty.connect>
             if (!Pty.get(id)) throw new Error("Session not found")
             return {
               onOpen(_event, ws) {
-                handler = Pty.connect(id, ws)
+                handler = Pty.connect(id, ws, { directory })
               },
               onMessage(event) {
                 handler?.onMessage(String(event.data))

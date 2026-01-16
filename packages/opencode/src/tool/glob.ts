@@ -33,23 +33,50 @@ export const GlobTool = Tool.define("glob", {
     const limit = 100
     const files = []
     let truncated = false
-    for await (const file of Ripgrep.files({
-      cwd: search,
-      glob: [params.pattern],
-    })) {
-      if (files.length >= limit) {
-        truncated = true
-        break
+
+    if (await Ripgrep.filepathIfAvailable()) {
+      for await (const file of Ripgrep.files({
+        cwd: search,
+        glob: [params.pattern],
+      })) {
+        if (files.length >= limit) {
+          truncated = true
+          break
+        }
+        const full = path.resolve(search, file)
+        const stats = await Bun.file(full)
+          .stat()
+          .then((x) => x.mtime.getTime())
+          .catch(() => 0)
+        files.push({
+          path: full,
+          mtime: stats,
+        })
       }
-      const full = path.resolve(search, file)
-      const stats = await Bun.file(full)
-        .stat()
-        .then((x) => x.mtime.getTime())
-        .catch(() => 0)
-      files.push({
-        path: full,
-        mtime: stats,
-      })
+    } else {
+      const globPattern =
+        params.pattern.includes("/") || params.pattern.startsWith("**") ? params.pattern : `**/${params.pattern}`
+      for await (const full of new Bun.Glob(globPattern).scan({
+        cwd: search,
+        absolute: true,
+        onlyFiles: true,
+        followSymlinks: true,
+        dot: true,
+      })) {
+        if (full.includes(`${path.sep}.git${path.sep}`)) continue
+        if (files.length >= limit) {
+          truncated = true
+          break
+        }
+        const stats = await Bun.file(full)
+          .stat()
+          .then((x) => x.mtime.getTime())
+          .catch(() => 0)
+        files.push({
+          path: full,
+          mtime: stats,
+        })
+      }
     }
     files.sort((a, b) => b.mtime - a.mtime)
 
