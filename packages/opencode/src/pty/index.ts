@@ -69,7 +69,6 @@ export namespace Pty {
     buffer: string
     subscribers: Set<WSContext>
     listeners: Set<(data: string) => void>
-    cwdPinned: boolean
   }
 
   const state = Instance.state(
@@ -129,7 +128,6 @@ export namespace Pty {
       buffer: "",
       subscribers: new Set(),
       listeners: new Set(),
-      cwdPinned: Boolean(input.cwd),
     }
     state().set(id, session)
     ptyProcess.onData((data) => {
@@ -243,14 +241,11 @@ export namespace Pty {
     session.subscribers.add(ws)
 
     const directory = options?.directory?.trim()
-    if (directory && !session.cwdPinned) {
-      session.cwdPinned = true
-      if (directory !== session.info.cwd) {
-        session.info.cwd = directory
-        Bus.publish(Event.Updated, { info: session.info })
-        const shell = detectShellKind(session.info.command)
-        session.process.write(buildCwdCommand(shell, directory))
-      }
+    if (directory && !/[\r\n]/.test(directory) && directory !== session.info.cwd) {
+      session.info.cwd = directory
+      Bus.publish(Event.Updated, { info: session.info })
+      const shell = detectShellKind(session.info.command)
+      session.process.write(buildCwdCommand(shell, directory))
     }
 
     if (session.buffer) {

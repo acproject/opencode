@@ -1,4 +1,4 @@
-import { test, expect, describe, mock } from "bun:test"
+import { test, expect, describe, mock, beforeEach, afterEach } from "bun:test"
 import { Config } from "../../src/config/config"
 import { Instance } from "../../src/project/instance"
 import { Auth } from "../../src/auth"
@@ -6,6 +6,16 @@ import { tmpdir } from "../fixture/fixture"
 import path from "path"
 import fs from "fs/promises"
 import { pathToFileURL } from "url"
+
+const originalAuthAll = Auth.all
+
+beforeEach(() => {
+  Auth.all = mock(() => Promise.resolve({}) as ReturnType<typeof originalAuthAll>) as unknown as typeof Auth.all
+})
+
+afterEach(() => {
+  Auth.all = originalAuthAll
+})
 
 test("loads config with defaults when no files exist", async () => {
   await using tmp = await tmpdir()

@@ -30,6 +30,13 @@ import { TerminalTool } from "./terminal"
 export namespace ToolRegistry {
   const log = Log.create({ service: "tool.registry" })
 
+  function alias(tool: Tool.Info, id: string): Tool.Info {
+    return {
+      id,
+      init: tool.init,
+    }
+  }
+
   export const state = Instance.state(async () => {
     const custom = [] as Tool.Info[]
     const glob = new Bun.Glob("tool/*.{js,ts}")
@@ -98,12 +105,17 @@ export namespace ToolRegistry {
       BashTool,
       TerminalTool,
       ReadTool,
+      alias(ReadTool, "readFile"),
       GlobTool,
       GrepTool,
       EditTool,
+      alias(EditTool, "editFile"),
       WriteTool,
+      alias(WriteTool, "writeFile"),
       TaskTool,
       WebFetchTool,
+      alias(WebFetchTool, "web_fetch"),
+      alias(WebFetchTool, "WebFetch"),
       TodoWriteTool,
       TodoReadTool,
       WebSearchTool,

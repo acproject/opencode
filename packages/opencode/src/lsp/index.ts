@@ -14,6 +14,16 @@ import { Flag } from "@/flag/flag"
 export namespace LSP {
   const log = Log.create({ service: "lsp" })
 
+  function clientKey(input: { root: string; serverID: string }) {
+    return `${input.root}::${input.serverID}`
+  }
+
+  function parseClientKey(key: string) {
+    const idx = key.lastIndexOf("::")
+    if (idx === -1) return { root: "", serverID: "" }
+    return { root: key.slice(0, idx), serverID: key.slice(idx + 2) }
+  }
+
   export const Event = {
     Updated: BusEvent.define("lsp.updated", z.object({})),
   }
@@ -89,6 +99,8 @@ export namespace LSP {
           servers,
           clients,
           spawning: new Map<string, Promise<LSPClient.Info | undefined>>(),
+          sessionLeases: new Map<string, Set<string>>(),
+          sessionRefCounts: new Map<string, number>(),
         }
       }
 
@@ -136,6 +148,8 @@ export namespace LSP {
         servers,
         clients,
         spawning: new Map<string, Promise<LSPClient.Info | undefined>>(),
+        sessionLeases: new Map<string, Set<string>>(),
+        sessionRefCounts: new Map<string, number>(),
       }
     },
     async (state) => {
@@ -274,9 +288,54 @@ export namespace LSP {
     return false
   }
 
-  export async function touchFile(input: string, waitForDiagnostics?: boolean) {
+  async function attachToSession(sessionID: string | undefined, clients: LSPClient.Info[]) {
+    if (!sessionID) return
+    const s = await state()
+    const lease = s.sessionLeases.get(sessionID)
+    if (!lease) return
+    for (const client of clients) {
+      const key = clientKey({ root: client.root, serverID: client.serverID })
+      if (lease.has(key)) continue
+      lease.add(key)
+      s.sessionRefCounts.set(key, (s.sessionRefCounts.get(key) ?? 0) + 1)
+    }
+  }
+
+  export async function bindSession(sessionID: string) {
+    const s = await state()
+    if (!s.sessionLeases.has(sessionID)) {
+      s.sessionLeases.set(sessionID, new Set<string>())
+    }
+  }
+
+  export async function unbindSession(sessionID: string) {
+    const s = await state()
+    const lease = s.sessionLeases.get(sessionID)
+    if (!lease) return
+    s.sessionLeases.delete(sessionID)
+
+    for (const key of lease) {
+      const next = (s.sessionRefCounts.get(key) ?? 0) - 1
+      if (next > 0) {
+        s.sessionRefCounts.set(key, next)
+        continue
+      }
+
+      s.sessionRefCounts.delete(key)
+      const { root, serverID } = parseClientKey(key)
+      const idx = s.clients.findIndex((c) => c.root === root && c.serverID === serverID)
+      if (idx === -1) continue
+      const client = s.clients[idx]
+      await client.shutdown().catch(() => {})
+      s.clients.splice(idx, 1)
+      Bus.publish(Event.Updated, {})
+    }
+  }
+
+  export async function touchFile(input: string, waitForDiagnostics?: boolean, sessionID?: string) {
     log.info("touching file", { file: input })
     const clients = await getClients(input)
+    await attachToSession(sessionID, clients)
     await Promise.all(
       clients.map(async (client) => {
         const wait = waitForDiagnostics ? client.waitForDiagnostics({ path: input }) : Promise.resolve()

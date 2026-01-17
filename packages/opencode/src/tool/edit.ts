@@ -135,7 +135,7 @@ export const EditTool = Tool.define("edit", {
     })
 
     let output = ""
-    await LSP.touchFile(filePath, true)
+    await LSP.touchFile(filePath, true, ctx.sessionID)
     const diagnostics = await LSP.diagnostics()
     const normalizedFilePath = Filesystem.normalizePath(filePath)
     const issues = diagnostics[normalizedFilePath] ?? []

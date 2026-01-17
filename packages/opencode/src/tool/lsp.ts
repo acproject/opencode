@@ -72,7 +72,7 @@ export const LspTool = Tool.define("lsp", {
       throw new Error("No LSP server available for this file type.")
     }
 
-    await LSP.touchFile(file, true)
+    await LSP.touchFile(file, true, ctx.sessionID)
 
     const result: unknown[] = await (async () => {
       switch (args.operation) {

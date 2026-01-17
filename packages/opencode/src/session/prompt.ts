@@ -1007,6 +1007,17 @@ export namespace SessionPrompt {
     const runtime = await ToolRuntime.current()
     const toolInstances = await ToolRegistry.tools(input.model.providerID, input.agent)
 
+    const unknownToolMessage = (toolName: string) => {
+      if (toolName !== "websearch" && toolName !== "codesearch") return `Unknown tool: ${toolName}`
+      const canUse = input.model.providerID === "opencode" || Flag.OPENCODE_ENABLE_EXA
+      const enableHint = canUse
+        ? ""
+        : `（当前 provider 未启用该工具；可设置 OPENCODE_ENABLE_EXA=1 后重启，或切到 provider=opencode）`
+      const usageHint =
+        toolName === "websearch" ? `如果你是要抓取某个 URL 的内容，请用 webfetch(url=...)。` : ``
+      return `Unknown tool: ${toolName} ${enableHint}${usageHint ? " " + usageHint : ""}`.trim()
+    }
+
     let lastPtyID = await findLastTerminalPtyID(input.session.id)
     let executed = 0
     for (const call of calls) {
@@ -1025,7 +1036,7 @@ export namespace SessionPrompt {
           state: {
             status: "error",
             input: (call.args ?? {}) as any,
-            error: `Unknown tool: ${call.tool}`,
+            error: unknownToolMessage(call.tool),
             time: {
               start: Date.now(),
               end: Date.now(),

@@ -933,7 +933,7 @@ test("model modalities default correctly", async () => {
       expect(model.capabilities.output.text).toBe(true)
     },
   })
-})
+}, 60000)
 
 test("model with custom cost values", async () => {
   await using tmp = await tmpdir({

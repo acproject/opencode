@@ -52,6 +52,7 @@ export namespace Filesystem {
       const parent = dirname(current)
       if (parent === current) break
       current = parent
+      current = parent
     }
   }
 

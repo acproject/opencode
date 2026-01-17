@@ -137,7 +137,7 @@ export const ReadTool = Tool.define("read", {
     output += "\n</file>"
 
     // just warms the lsp client
-    LSP.touchFile(filepath, false)
+    LSP.touchFile(filepath, false, ctx.sessionID)
     FileTime.read(ctx.sessionID, filepath)
 
     return {

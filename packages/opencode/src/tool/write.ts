@@ -63,7 +63,7 @@ export const WriteTool = Tool.define("write", {
     FileTime.read(ctx.sessionID, filepath)
 
     let output = ""
-    await LSP.touchFile(filepath, true)
+    await LSP.touchFile(filepath, true, ctx.sessionID)
     const diagnostics = await LSP.diagnostics()
     const normalizedFilepath = Filesystem.normalizePath(filepath)
     let projectDiagnosticsCount = 0
