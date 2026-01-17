@@ -21,6 +21,13 @@ export type MessageWithParts = {
   parts: Part[]
 }
 
+export function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean } {
+  if (maxLines <= 0) return { text: "", truncated: text.length > 0 }
+  const lines = text.split("\n")
+  if (lines.length <= maxLines) return { text, truncated: false }
+  return { text: [...lines.slice(0, maxLines), "…"].join("\n"), truncated: true }
+}
+
 export function formatTranscript(
   session: SessionInfo,
   messages: MessageWithParts[],

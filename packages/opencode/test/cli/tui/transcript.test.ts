@@ -4,10 +4,28 @@ import {
   formatMessage,
   formatPart,
   formatTranscript,
+  truncateLines,
 } from "../../../src/cli/cmd/tui/util/transcript"
 import type { AssistantMessage, Part, UserMessage } from "@opencode-ai/sdk/v2"
 
 describe("transcript", () => {
+  describe("truncateLines", () => {
+    test("does not truncate when within limit", () => {
+      const result = truncateLines("a\nb\nc", 3)
+      expect(result).toEqual({ text: "a\nb\nc", truncated: false })
+    })
+
+    test("truncates and appends ellipsis", () => {
+      const result = truncateLines("a\nb\nc", 2)
+      expect(result).toEqual({ text: "a\nb\n…", truncated: true })
+    })
+
+    test("handles non-positive maxLines", () => {
+      const result = truncateLines("a\nb\nc", 0)
+      expect(result).toEqual({ text: "", truncated: true })
+    })
+  })
+
   describe("formatAssistantHeader", () => {
     const baseMsg: AssistantMessage = {
       id: "msg_123",

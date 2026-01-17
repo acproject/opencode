@@ -5,16 +5,20 @@ import os from "os"
 
 const app = "opencode"
 
-const data = path.join(xdgData!, app)
-const cache = path.join(xdgCache!, app)
-const config = path.join(xdgConfig!, app)
-const state = path.join(xdgState!, app)
+function sanitizePath(p: string): string {
+  return p.replace(/\0/g, "")
+}
+
+const data = sanitizePath(path.join(xdgData!, app))
+const cache = sanitizePath(path.join(xdgCache!, app))
+const config = sanitizePath(path.join(xdgConfig!, app))
+const state = sanitizePath(path.join(xdgState!, app))
 
 export namespace Global {
   export const Path = {
     // Allow override via OPENCODE_TEST_HOME for test isolation
     get home() {
-      return process.env.OPENCODE_TEST_HOME || os.homedir()
+      return sanitizePath(process.env.OPENCODE_TEST_HOME || os.homedir())
     },
     data,
     bin: path.join(data, "bin"),

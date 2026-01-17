@@ -73,7 +73,7 @@ import { Filesystem } from "@/util/filesystem"
 import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
-import { formatTranscript } from "../../util/transcript"
+import { formatTranscript, truncateLines } from "../../util/transcript"
 
 addDefaultParsers(parsers.parsers)
 
@@ -1429,9 +1429,11 @@ function InlineTool(props: {
   part: ToolPart
 }) {
   const [margin, setMargin] = createSignal(0)
-  const { theme } = useTheme()
+  const { theme, syntax } = useTheme()
   const ctx = use()
   const sync = useSync()
+  const renderer = useRenderer()
+  const [expanded, setExpanded] = createSignal(false)
 
   const permission = createMemo(() => {
     const callID = sync.data.permission[ctx.sessionID]?.at(0)?.tool?.callID
@@ -1454,10 +1456,39 @@ function InlineTool(props: {
       error()?.includes("user dismissed"),
   )
 
+  const output = createMemo(() => {
+    if (!ctx.showDetails()) return undefined
+    if (props.part.state.status !== "completed") return undefined
+    const text = stripAnsi(props.part.state.output ?? "").trimEnd()
+    if (!text) return undefined
+    return text
+  })
+
+  const overflow = createMemo(() => {
+    const out = output()
+    if (!out) return false
+    return truncateLines(out, 20).truncated
+  })
+
+  const outputText = createMemo(() => {
+    const out = output()
+    if (!out) return ""
+    if (expanded() || !overflow()) return out
+    return truncateLines(out, 20).text
+  })
+
   return (
     <box
       marginTop={margin()}
       paddingLeft={3}
+      onMouseUp={
+        overflow()
+          ? () => {
+              if (renderer.getSelection()?.getSelectedText()) return
+              setExpanded((prev) => !prev)
+            }
+          : undefined
+      }
       renderBefore={function () {
         const el = this as BoxRenderable
         const parent = el.parent
@@ -1486,6 +1517,22 @@ function InlineTool(props: {
           <span style={{ fg: props.iconColor }}>{props.icon}</span> {props.children}
         </Show>
       </text>
+      <Show when={output()}>
+        <box paddingLeft={3}>
+          <code
+            filetype="text"
+            drawUnstyledText={false}
+            streaming={false}
+            syntaxStyle={syntax()}
+            content={outputText()}
+            conceal={ctx.conceal()}
+            fg={theme.text}
+          />
+          <Show when={overflow()}>
+            <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
+          </Show>
+        </box>
+      </Show>
       <Show when={error() && !denied()}>
         <text fg={theme.error}>{error()}</text>
       </Show>

@@ -601,7 +601,19 @@ export namespace MessageV2 {
     return result
   }
 
+  function findSystemError(input: unknown, maxDepth = 5): SystemError | undefined {
+    let current: any = input
+    for (let depth = 0; depth <= maxDepth; depth++) {
+      if (!current || (typeof current !== "object" && typeof current !== "function")) return undefined
+      if (typeof current.code === "string") return current as SystemError
+      current = current.cause
+    }
+    return undefined
+  }
+
   export function fromError(e: unknown, ctx: { providerID: string }) {
+    const systemError = findSystemError(e)
+
     switch (true) {
       case e instanceof DOMException && e.name === "AbortError":
         return new MessageV2.AbortedError(
@@ -620,15 +632,15 @@ export namespace MessageV2 {
           },
           { cause: e },
         ).toObject()
-      case (e as SystemError)?.code === "ECONNRESET":
+      case systemError?.code === "ECONNRESET":
         return new MessageV2.APIError(
           {
             message: "Connection reset by server",
             isRetryable: true,
             metadata: {
-              code: (e as SystemError).code ?? "",
-              syscall: (e as SystemError).syscall ?? "",
-              message: (e as SystemError).message ?? "",
+              code: systemError.code ?? "",
+              syscall: systemError.syscall ?? "",
+              message: systemError.message ?? "",
             },
           },
           { cause: e },

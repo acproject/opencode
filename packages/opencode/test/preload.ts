@@ -4,11 +4,10 @@ import os from "os"
 import path from "path"
 import fs from "fs/promises"
 import fsSync from "fs"
-import { afterAll } from "bun:test"
 
 const dir = path.join(os.tmpdir(), "opencode-test-data-" + process.pid)
 await fs.mkdir(dir, { recursive: true })
-afterAll(() => {
+process.on("exit", () => {
   fsSync.rmSync(dir, { recursive: true, force: true })
 })
 // Set test home directory to isolate tests from user's actual home directory

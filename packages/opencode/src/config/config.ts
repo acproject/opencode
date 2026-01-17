@@ -187,6 +187,7 @@ export namespace Config {
   })
 
   export async function installDependencies(dir: string) {
+    if (process.env["OPENCODE_TEST_HOME"]) return
     const pkg = path.join(dir, "package.json")
 
     if (!(await Bun.file(pkg).exists())) {

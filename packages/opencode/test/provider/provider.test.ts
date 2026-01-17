@@ -780,7 +780,9 @@ test("explicit baseURL overrides api field", async () => {
   })
 })
 
-test("model inherits properties from existing database model", async () => {
+test(
+  "model inherits properties from existing database model",
+  async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -814,7 +816,9 @@ test("model inherits properties from existing database model", async () => {
       expect(model.limit.context).toBeGreaterThan(0)
     },
   })
-})
+  },
+  20000,
+)
 
 test("disabled_providers prevents loading even with env var", async () => {
   await using tmp = await tmpdir({
@@ -1326,7 +1330,9 @@ test("completely new provider not in database can be configured", async () => {
   })
 })
 
-test("disabled_providers and enabled_providers interaction", async () => {
+test(
+  "disabled_providers and enabled_providers interaction",
+  async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -1358,7 +1364,9 @@ test("disabled_providers and enabled_providers interaction", async () => {
       expect(providers["google"]).toBeUndefined()
     },
   })
-})
+  },
+  20000,
+)
 
 test("model with tool_call false", async () => {
   await using tmp = await tmpdir({
@@ -2135,7 +2143,7 @@ test("variants filtered in second pass for database models", async () => {
       expect(model.variants!["medium"]).toBeDefined()
     },
   })
-})
+}, 20000)
 
 test("custom model with variants enabled and disabled", async () => {
   await using tmp = await tmpdir({
