@@ -2,6 +2,7 @@ import { test, expect, describe, mock, beforeEach, afterEach } from "bun:test"
 import { Config } from "../../src/config/config"
 import { Instance } from "../../src/project/instance"
 import { Auth } from "../../src/auth"
+import { MCP } from "../../src/mcp"
 import { tmpdir } from "../fixture/fixture"
 import path from "path"
 import fs from "fs/promises"
@@ -24,6 +25,15 @@ test("loads config with defaults when no files exist", async () => {
     fn: async () => {
       const config = await Config.get()
       expect(config.username).toBeDefined()
+      expect(config.mcp?.["local-content-server"]).toEqual(
+        expect.objectContaining({
+          type: "local",
+          command: ["node", "/Users/acproject/workspace/cpp_projects/local_content_mcp_server/web/mcp_bridge.js"],
+          enabled: false,
+        }),
+      )
+      const statuses = await MCP.status()
+      expect(statuses["local-content-server"]).toEqual({ status: "disabled" })
     },
   })
 })

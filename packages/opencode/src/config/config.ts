@@ -40,7 +40,18 @@ export namespace Config {
 
     // Load remote/well-known config first as the base layer (lowest precedence)
     // This allows organizations to provide default configs that users can override
-    let result: Info = {}
+    let result: Info = {
+      mcp: {
+        "local-content-server": {
+          type: "local",
+          command: ["node", "/Users/acproject/workspace/cpp_projects/local_content_mcp_server/web/mcp_bridge.js"],
+          environment: {
+            MCP_SERVER_URL: "http://localhost:8086",
+          },
+          enabled: false,
+        },
+      },
+    }
     for (const [key, value] of Object.entries(auth)) {
       if (value.type === "wellknown") {
         process.env[value.key] = value.token
@@ -188,6 +199,8 @@ export namespace Config {
 
   export async function installDependencies(dir: string) {
     if (process.env["OPENCODE_TEST_HOME"]) return
+    if (process.env["BUN_TEST"]) return
+    if (process.env["NODE_ENV"] === "test") return
     const pkg = path.join(dir, "package.json")
 
     if (!(await Bun.file(pkg).exists())) {
