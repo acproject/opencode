@@ -3,6 +3,8 @@ import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { Agent } from "../../src/agent/agent"
 import { PermissionNext } from "../../src/permission/next"
+import fs from "fs/promises"
+import path from "path"
 
 // Helper to evaluate permission for a tool with wildcard pattern
 function evalPerm(agent: Agent.Info | undefined, permission: string): PermissionNext.Action | undefined {
@@ -104,6 +106,24 @@ test("compaction agent denies all permissions", async () => {
   })
 })
 
+test("doc agent allows editing documentation files only", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const doc = await Agent.get("doc")
+      expect(doc).toBeDefined()
+      expect(doc?.mode).toBe("primary")
+      expect(doc?.native).toBe(true)
+      expect(evalPerm(doc, "edit")).toBe("deny")
+      expect(PermissionNext.evaluate("edit", "README.md", doc!.permission).action).toBe("allow")
+      expect(PermissionNext.evaluate("edit", "docs/guide.mdx", doc!.permission).action).toBe("allow")
+      expect(PermissionNext.evaluate("edit", "notes.txt", doc!.permission).action).toBe("allow")
+      expect(PermissionNext.evaluate("edit", "src/index.ts", doc!.permission).action).toBe("deny")
+    },
+  })
+})
+
 test("custom agent from config creates new agent", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -157,6 +177,37 @@ test("custom agent config overrides native agent properties", async () => {
       expect(build?.temperature).toBe(0.7)
       expect(build?.color).toBe("#FF0000")
       expect(build?.native).toBe(true)
+    },
+  })
+})
+
+test("custom agent from .opencode/agent markdown is listed and selectable", async () => {
+  await using tmp = await tmpdir()
+  await fs.mkdir(path.join(tmp.path, ".opencode", "agent"), { recursive: true })
+  await fs.writeFile(
+    path.join(tmp.path, ".opencode", "agent", "writer.md"),
+    [
+      "---",
+      'description: "Custom writer agent"',
+      "mode: primary",
+      "---",
+      "You are a custom writer agent.",
+      "",
+    ].join("\n"),
+  )
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const writer = await Agent.get("writer")
+      expect(writer).toBeDefined()
+      expect(writer?.native).toBe(false)
+      expect(writer?.mode).toBe("primary")
+      expect(writer?.description).toBe("Custom writer agent")
+
+      const agents = await Agent.list()
+      const primary = agents.filter((a) => a.mode !== "subagent" && !a.hidden).map((a) => a.name)
+      expect(primary).toContain("writer")
     },
   })
 })

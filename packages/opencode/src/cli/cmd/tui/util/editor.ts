@@ -29,4 +29,27 @@ export namespace Editor {
     opts.renderer.requestRender()
     return content || undefined
   }
+
+  export async function openFile(opts: { filepath: string; renderer: CliRenderer }): Promise<string | undefined> {
+    const editor = process.env["VISUAL"] || process.env["EDITOR"]
+    if (!editor) return
+
+    opts.renderer.suspend()
+    opts.renderer.currentRenderBuffer.clear()
+    const parts = editor.split(" ")
+    const proc = Bun.spawn({
+      cmd: [...parts, opts.filepath],
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    })
+    await proc.exited
+    const content = await Bun.file(opts.filepath)
+      .text()
+      .catch(() => "")
+    opts.renderer.currentRenderBuffer.clear()
+    opts.renderer.resume()
+    opts.renderer.requestRender()
+    return content || undefined
+  }
 }

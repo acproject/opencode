@@ -11,6 +11,28 @@ export namespace Clipboard {
     mime: string
   }
 
+  const emojiLike = (() => {
+    try {
+      return new RegExp("[\\p{Extended_Pictographic}]", "u")
+    } catch {
+      return /[\u{1F000}-\u{1FAFF}\u{1FB00}-\u{1FBFF}\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF]/u
+    }
+  })()
+
+  export function sanitizeTextForTuiInput(text: string): string {
+    const normalized = text.replace(/\r\n?/g, "\n").replace(/[\u200D\uFE0E\uFE0F]/g, "")
+    return Array.from(normalized)
+      .filter((ch) => {
+        const cp = ch.codePointAt(0) ?? 0
+        if (cp === 0x09 || cp === 0x0a) return true
+        if (cp < 0x20 || cp === 0x7f) return false
+        if (cp > 0xffff) return false
+        if (emojiLike.test(ch)) return false
+        return true
+      })
+      .join("")
+  }
+
   export async function read(): Promise<Content | undefined> {
     const os = platform()
 

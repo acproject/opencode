@@ -812,7 +812,14 @@ export function Prompt(props: PromptProps) {
                     })
                     return
                   }
-                  // If no image, let the default paste behavior continue
+                  if (content?.mime === "text/plain" && content.data) {
+                    const safe = Clipboard.sanitizeTextForTuiInput(content.data)
+                    if (safe !== content.data) {
+                      e.preventDefault()
+                      input.insertText(safe)
+                      return
+                    }
+                  }
                 }
                 if (keybind.match("input_clear", e) && store.prompt.input !== "") {
                   input.clear()

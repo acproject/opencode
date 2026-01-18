@@ -13,6 +13,8 @@ import { Instance } from "../../project/instance"
 import { Installation } from "../../installation"
 import path from "path"
 import { Global } from "../../global"
+import fs from "fs/promises"
+import { parse as parseJsonc, printParseErrorCode, type ParseError as JsoncParseError } from "jsonc-parser"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -48,6 +50,127 @@ function isMcpRemote(config: McpEntry): config is McpRemote {
   return isMcpConfigured(config) && config.type === "remote"
 }
 
+function parseCommandLine(input: string): string[] {
+  const out: string[] = []
+
+  let cur = ""
+  let quote: "'" | '"' | null = null
+  let escaped = false
+
+  const push = () => {
+    if (!cur) return
+    out.push(cur)
+    cur = ""
+  }
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (escaped) {
+      cur += ch
+      escaped = false
+      continue
+    }
+    if (ch === "\\") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (ch === quote) {
+        quote = null
+        continue
+      }
+      cur += ch
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch
+      continue
+    }
+    if (/\s/.test(ch)) {
+      push()
+      continue
+    }
+    cur += ch
+  }
+  push()
+
+  return out
+}
+
+function parseEnvironmentPairs(input: string): Record<string, string> {
+  const trimmed = input.trim()
+  if (!trimmed) return {}
+
+  const out: Record<string, string> = {}
+  for (const partRaw of trimmed.split(",").map((s) => s.trim())) {
+    if (!partRaw) continue
+    const eqIndex = partRaw.indexOf("=")
+    if (eqIndex <= 0) continue
+    const key = partRaw.slice(0, eqIndex).trim()
+    const value = partRaw.slice(eqIndex + 1).trim()
+    if (!key) continue
+    out[key] = value
+  }
+  return out
+}
+
+async function readJsoncObject(filepath: string): Promise<Record<string, unknown>> {
+  const text = await Bun.file(filepath)
+    .text()
+    .catch((err) => {
+      if (err?.code === "ENOENT") return ""
+      throw err
+    })
+  if (!text.trim()) return {}
+
+  const errors: JsoncParseError[] = []
+  const data = parseJsonc(text, errors, { allowTrailingComma: true })
+  if (errors.length) {
+    const first = errors[0]
+    const before = text.slice(0, first.offset)
+    const line = before.split("\n").length
+    const col = before.split("\n").at(-1)!.length + 1
+    const code = printParseErrorCode(first.error)
+    throw new Error(`Invalid JSONC in ${filepath} (${code} at ${line}:${col})`)
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) return {}
+  return data as Record<string, unknown>
+}
+
+async function writeJsonObject(filepath: string, data: Record<string, unknown>) {
+  await fs.mkdir(path.dirname(filepath), { recursive: true })
+  await Bun.write(filepath, JSON.stringify(data, null, 2))
+}
+
+async function upsertMcpIntoFile(opts: { filepath: string; name: string; entry: Config.Mcp }) {
+  const existing = await readJsoncObject(opts.filepath)
+  const existingMcp = existing["mcp"]
+  const mcp =
+    existingMcp && typeof existingMcp === "object" && !Array.isArray(existingMcp)
+      ? (existingMcp as Record<string, unknown>)
+      : {}
+
+  if (mcp[opts.name] !== undefined) {
+    const overwrite = await prompts.confirm({
+      message: `MCP server "${opts.name}" already exists in ${opts.filepath}. Overwrite?`,
+      initialValue: false,
+    })
+    if (prompts.isCancel(overwrite)) throw new UI.CancelledError()
+    if (!overwrite) {
+      prompts.outro("Cancelled")
+      return { written: false as const }
+    }
+  }
+
+  const updated: Record<string, unknown> = { ...existing }
+  if (!updated["$schema"]) updated["$schema"] = "https://opencode.ai/config.json"
+  updated["mcp"] = { ...mcp, [opts.name]: opts.entry }
+
+  await writeJsonObject(opts.filepath, updated)
+  return { written: true as const }
+}
+
 export const McpCommand = cmd({
   command: "mcp",
   describe: "manage MCP (Model Context Protocol) servers",
@@ -55,6 +178,7 @@ export const McpCommand = cmd({
     yargs
       .command(McpStartCommand)
       .command(McpAddCommand)
+      .command(McpImportCommand)
       .command(McpListCommand)
       .command(McpAuthCommand)
       .command(McpLogoutCommand)
@@ -409,6 +533,28 @@ export const McpAddCommand = cmd({
     })
     if (prompts.isCancel(name)) throw new UI.CancelledError()
 
+    const saveTarget = await prompts.select({
+      message: "Where should this configuration be saved?",
+      options: [
+        {
+          label: "Global",
+          value: "global",
+          hint: path.join(Global.Path.config, "opencode.json"),
+        },
+        {
+          label: "Project",
+          value: "project",
+          hint: path.join(process.cwd(), ".opencode", "opencode.json"),
+        },
+        {
+          label: "Print only",
+          value: "print",
+          hint: "Do not write files",
+        },
+      ],
+    })
+    if (prompts.isCancel(saveTarget)) throw new UI.CancelledError()
+
     const type = await prompts.select({
       message: "Select MCP server type",
       options: [
@@ -429,12 +575,66 @@ export const McpAddCommand = cmd({
     if (type === "local") {
       const command = await prompts.text({
         message: "Enter command to run",
-        placeholder: "e.g., opencode x @modelcontextprotocol/server-filesystem",
-        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+        placeholder: 'e.g., node /path/to/mcp_bridge.js',
+        validate: (x) => (x && x.trim().length > 0 ? undefined : "Required"),
       })
       if (prompts.isCancel(command)) throw new UI.CancelledError()
 
-      prompts.log.info(`Local MCP server "${name}" configured with command: ${command}`)
+      const argv = parseCommandLine(command)
+      if (argv.length === 0) {
+        prompts.log.error("Invalid command")
+        prompts.outro("Done")
+        return
+      }
+
+      const envText = await prompts.text({
+        message: "Environment variables (optional, KEY=VALUE, comma-separated)",
+        placeholder: "e.g., MCP_SERVER_URL=http://localhost:8086",
+      })
+      if (prompts.isCancel(envText)) throw new UI.CancelledError()
+
+      const enabled = await prompts.confirm({
+        message: "Enable this server now?",
+        initialValue: true,
+      })
+      if (prompts.isCancel(enabled)) throw new UI.CancelledError()
+
+      const environment = parseEnvironmentPairs(envText)
+      const entry: Config.Mcp = {
+        type: "local",
+        command: argv,
+        ...(Object.keys(environment).length ? { environment } : {}),
+        enabled,
+      }
+
+      if (saveTarget === "print") {
+        prompts.log.info(`Add this to your opencode.json:`)
+        prompts.log.info(
+          JSON.stringify(
+            {
+              mcp: {
+                [name]: entry,
+              },
+            },
+            null,
+            2,
+          ),
+        )
+        prompts.outro("Done")
+        return
+      }
+
+      const filepath =
+        saveTarget === "global"
+          ? path.join(Global.Path.config, "opencode.json")
+          : path.join(process.cwd(), ".opencode", "opencode.json")
+      const { written } = await upsertMcpIntoFile({ filepath, name, entry }).catch((err) => {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        return { written: false as const }
+      })
+      if (!written) return
+
+      prompts.log.success(`Saved MCP server "${name}" to ${filepath}`)
       prompts.outro("MCP server added successfully")
       return
     }
@@ -465,6 +665,12 @@ export const McpAddCommand = cmd({
         })
         if (prompts.isCancel(hasClientId)) throw new UI.CancelledError()
 
+        const enabled = await prompts.confirm({
+          message: "Enable this server now?",
+          initialValue: true,
+        })
+        if (prompts.isCancel(enabled)) throw new UI.CancelledError()
+
         if (hasClientId) {
           const clientId = await prompts.text({
             message: "Enter client ID",
@@ -487,42 +693,334 @@ export const McpAddCommand = cmd({
             clientSecret = secret
           }
 
-          prompts.log.info(`Remote MCP server "${name}" configured with OAuth (client ID: ${clientId})`)
-          prompts.log.info("Add this to your opencode.json:")
-          prompts.log.info(`
-  "mcp": {
-    "${name}": {
-      "type": "remote",
-      "url": "${url}",
-      "oauth": {
-        "clientId": "${clientId}"${clientSecret ? `,\n        "clientSecret": "${clientSecret}"` : ""}
-      }
-    }
-  }`)
+          const entry: Config.Mcp = {
+            type: "remote",
+            url,
+            enabled,
+            oauth: {
+              clientId,
+              ...(clientSecret ? { clientSecret } : {}),
+            },
+          }
+
+          if (saveTarget === "print") {
+            const redacted: Config.Mcp = {
+              ...entry,
+              oauth: {
+                clientId,
+                ...(clientSecret ? { clientSecret: "REDACTED" } : {}),
+              },
+            }
+            prompts.log.info(`Add this to your opencode.json:`)
+            prompts.log.info(JSON.stringify({ mcp: { [name]: redacted } }, null, 2))
+            prompts.outro("Done")
+            return
+          }
+
+          const filepath =
+            saveTarget === "global"
+              ? path.join(Global.Path.config, "opencode.json")
+              : path.join(process.cwd(), ".opencode", "opencode.json")
+          const { written } = await upsertMcpIntoFile({ filepath, name, entry }).catch((err) => {
+            prompts.log.error(err instanceof Error ? err.message : String(err))
+            return { written: false as const }
+          })
+          if (!written) return
+
+          prompts.log.success(`Saved MCP server "${name}" to ${filepath}`)
         } else {
-          prompts.log.info(`Remote MCP server "${name}" configured with OAuth (dynamic registration)`)
-          prompts.log.info("Add this to your opencode.json:")
-          prompts.log.info(`
-  "mcp": {
-    "${name}": {
-      "type": "remote",
-      "url": "${url}",
-      "oauth": {}
-    }
-  }`)
+          const entry: Config.Mcp = {
+            type: "remote",
+            url,
+            enabled,
+            oauth: {},
+          }
+
+          if (saveTarget === "print") {
+            prompts.log.info(`Add this to your opencode.json:`)
+            prompts.log.info(JSON.stringify({ mcp: { [name]: entry } }, null, 2))
+            prompts.outro("Done")
+            return
+          }
+
+          const filepath =
+            saveTarget === "global"
+              ? path.join(Global.Path.config, "opencode.json")
+              : path.join(process.cwd(), ".opencode", "opencode.json")
+          const { written } = await upsertMcpIntoFile({ filepath, name, entry }).catch((err) => {
+            prompts.log.error(err instanceof Error ? err.message : String(err))
+            return { written: false as const }
+          })
+          if (!written) return
+
+          prompts.log.success(`Saved MCP server "${name}" to ${filepath}`)
         }
       } else {
+        const enabled = await prompts.confirm({
+          message: "Enable this server now?",
+          initialValue: true,
+        })
+        if (prompts.isCancel(enabled)) throw new UI.CancelledError()
+
         const client = new Client({
           name: "opencode",
           version: "1.0.0",
         })
         const transport = new StreamableHTTPClientTransport(new URL(url))
         await client.connect(transport)
-        prompts.log.info(`Remote MCP server "${name}" configured with URL: ${url}`)
+
+        const entry: Config.Mcp = {
+          type: "remote",
+          url,
+          enabled,
+          oauth: false,
+        }
+
+        if (saveTarget === "print") {
+          prompts.log.info(`Add this to your opencode.json:`)
+          prompts.log.info(JSON.stringify({ mcp: { [name]: entry } }, null, 2))
+          prompts.outro("Done")
+          return
+        }
+
+        const filepath =
+          saveTarget === "global"
+            ? path.join(Global.Path.config, "opencode.json")
+            : path.join(process.cwd(), ".opencode", "opencode.json")
+        const { written } = await upsertMcpIntoFile({ filepath, name, entry }).catch((err) => {
+          prompts.log.error(err instanceof Error ? err.message : String(err))
+          return { written: false as const }
+        })
+        if (!written) return
+
+        prompts.log.success(`Saved MCP server "${name}" to ${filepath}`)
       }
     }
 
     prompts.outro("MCP server added successfully")
+  },
+})
+
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null && !Array.isArray(x)
+}
+
+function extractMcpImportMap(input: unknown, name?: string): Record<string, unknown> | undefined {
+  if (!isPlainObject(input)) return
+
+  const fromMcpField = (() => {
+    const mcp = input["mcp"]
+    if (!isPlainObject(mcp)) return
+    if (name) {
+      if (mcp[name] === undefined) return
+      return { [name]: mcp[name] }
+    }
+    return mcp
+  })()
+  if (fromMcpField) return fromMcpField
+
+  if (name) {
+    if ("type" in input) return { [name]: input }
+    const maybe = input[name]
+    if (maybe !== undefined) return { [name]: maybe }
+    return
+  }
+
+  const entries = Object.entries(input)
+  if (entries.length === 0) return {}
+  const looksLikeMap = entries.every(([, v]) => isPlainObject(v) && "type" in v)
+  if (looksLikeMap) return input
+}
+
+function redactForPrint(mcp: Record<string, Config.Mcp>): Record<string, Config.Mcp> {
+  const out: Record<string, Config.Mcp> = {}
+  for (const [name, entry] of Object.entries(mcp)) {
+    if (entry.type === "remote" && entry.oauth && typeof entry.oauth === "object") {
+      const oauth = entry.oauth.clientSecret ? { ...entry.oauth, clientSecret: "REDACTED" } : entry.oauth
+      out[name] = { ...entry, oauth }
+      continue
+    }
+    out[name] = entry
+  }
+  return out
+}
+
+async function upsertMcpsIntoFile(opts: {
+  filepath: string
+  entries: Record<string, Config.Mcp>
+  overwrite: boolean
+}) {
+  const existing = await readJsoncObject(opts.filepath)
+  const existingMcp = existing["mcp"]
+  const currentMcp =
+    existingMcp && typeof existingMcp === "object" && !Array.isArray(existingMcp)
+      ? (existingMcp as Record<string, unknown>)
+      : {}
+
+  let changed = false
+  const nextMcp: Record<string, unknown> = { ...currentMcp }
+  const skipped: string[] = []
+  const overwritten: string[] = []
+  const added: string[] = []
+
+  for (const [name, entry] of Object.entries(opts.entries)) {
+    const exists = nextMcp[name] !== undefined
+    if (exists && !opts.overwrite) {
+      if (!process.stderr.isTTY) {
+        skipped.push(name)
+        continue
+      }
+      const confirm = await prompts.confirm({
+        message: `MCP server "${name}" already exists in ${opts.filepath}. Overwrite?`,
+        initialValue: false,
+      })
+      if (prompts.isCancel(confirm)) throw new UI.CancelledError()
+      if (!confirm) {
+        skipped.push(name)
+        continue
+      }
+    }
+
+    nextMcp[name] = entry
+    changed = true
+    if (exists) overwritten.push(name)
+    else added.push(name)
+  }
+
+  if (!changed) return { written: false as const, added, overwritten, skipped }
+
+  const updated: Record<string, unknown> = { ...existing }
+  if (!updated["$schema"]) updated["$schema"] = "https://opencode.ai/config.json"
+  updated["mcp"] = nextMcp
+  await writeJsonObject(opts.filepath, updated)
+
+  return { written: true as const, added, overwritten, skipped }
+}
+
+export const McpImportCommand = cmd({
+  command: "import",
+  describe: "import MCP server config from JSON/JSONC",
+  builder: (yargs) =>
+    yargs
+      .option("file", { type: "string", describe: "path to JSON/JSONC file" })
+      .option("json", { type: "string", describe: "inline JSON/JSONC" })
+      .option("name", { type: "string", describe: "server name (when importing a single entry)" })
+      .option("global", { type: "boolean", describe: "save to global config" })
+      .option("project", { type: "boolean", describe: "save to project config" })
+      .option("print", { type: "boolean", describe: "print only; do not write files" })
+      .option("overwrite", { type: "boolean", default: false, describe: "overwrite existing servers" })
+      .check((args) => {
+        if (!args.file && !args.json) throw new Error("Must provide either --file or --json")
+        if (args.file && args.json) throw new Error("Only one of --file or --json can be provided")
+        const targets = [args.global, args.project, args.print].filter(Boolean).length
+        if (targets > 1) throw new Error("Only one of --global, --project, or --print can be provided")
+        return true
+      }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("Import MCP servers")
+
+    const inputText =
+      args.json ??
+      (await Bun.file(args.file!)
+        .text()
+        .catch((err) => {
+          throw new Error(`Failed to read ${args.file}: ${err instanceof Error ? err.message : String(err)}`)
+        }))
+
+    const errors: JsoncParseError[] = []
+    const parsed = parseJsonc(inputText, errors, { allowTrailingComma: true })
+    if (errors.length) {
+      const first = errors[0]
+      const before = inputText.slice(0, first.offset)
+      const line = before.split("\n").length
+      const col = before.split("\n").at(-1)!.length + 1
+      const code = printParseErrorCode(first.error)
+      prompts.log.error(`Invalid JSONC (${code} at ${line}:${col})`)
+      prompts.outro("Done")
+      return
+    }
+
+    const map = extractMcpImportMap(parsed, args.name)
+    if (!map) {
+      prompts.log.error(
+        'Invalid input. Provide either {"mcp": {...}} / { "<name>": {...} } / use --name with a single MCP entry.',
+      )
+      prompts.outro("Done")
+      return
+    }
+
+    const validated: Record<string, Config.Mcp> = {}
+    const failures: Array<{ name: string; message: string }> = []
+    for (const [name, raw] of Object.entries(map)) {
+      const result = Config.Mcp.safeParse(raw)
+      if (!result.success) {
+        failures.push({
+          name,
+          message: result.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; "),
+        })
+        continue
+      }
+      validated[name] = result.data
+    }
+
+    if (failures.length) {
+      for (const f of failures) prompts.log.error(`${f.name}: ${f.message}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (!Object.keys(validated).length) {
+      prompts.log.warn("No MCP servers found to import")
+      prompts.outro("Done")
+      return
+    }
+
+    const saveTarget = await (async () => {
+      if (args.global) return "global" as const
+      if (args.project) return "project" as const
+      if (args.print) return "print" as const
+      const selected = await prompts.select({
+        message: "Where should this configuration be saved?",
+        options: [
+          { label: "Global", value: "global", hint: path.join(Global.Path.config, "opencode.json") },
+          { label: "Project", value: "project", hint: path.join(process.cwd(), ".opencode", "opencode.json") },
+          { label: "Print only", value: "print", hint: "Do not write files" },
+        ],
+      })
+      if (prompts.isCancel(selected)) throw new UI.CancelledError()
+      return selected as "global" | "project" | "print"
+    })()
+
+    if (saveTarget === "print") {
+      const redacted = redactForPrint(validated)
+      prompts.log.info(`Add this to your opencode.json:`)
+      prompts.log.info(JSON.stringify({ mcp: redacted }, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    const filepath =
+      saveTarget === "global"
+        ? path.join(Global.Path.config, "opencode.json")
+        : path.join(process.cwd(), ".opencode", "opencode.json")
+
+    const result = await upsertMcpsIntoFile({ filepath, entries: validated, overwrite: !!args.overwrite }).catch((err) => {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      return undefined
+    })
+    if (!result) return
+    if (!result.written) {
+      if (result.skipped.length) prompts.log.warn(`Skipped: ${result.skipped.join(", ")}`)
+      prompts.outro("Done")
+      return
+    }
+
+    prompts.log.success(`Saved ${Object.keys(validated).length} MCP server(s) to ${filepath}`)
+    if (result.added.length) prompts.log.info(`Added: ${result.added.join(", ")}`)
+    if (result.overwritten.length) prompts.log.info(`Overwritten: ${result.overwritten.join(", ")}`)
+    if (result.skipped.length) prompts.log.warn(`Skipped: ${result.skipped.join(", ")}`)
+    prompts.outro("Done")
   },
 })
 

@@ -37,6 +37,10 @@ import open from "open"
 import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { DialogPrompt } from "./ui/dialog-prompt"
+import { DialogSelect } from "@tui/ui/dialog-select"
+import fs from "fs/promises"
+import path from "path"
+import { Editor } from "@tui/util/editor"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -99,6 +103,34 @@ async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
 }
 
 import type { EventSource } from "./context/sdk"
+
+function isValidAgentName(name: string) {
+  if (!name) return false
+  if (name === "." || name === "..") return false
+  if (name.startsWith(".") || name.startsWith("/")) return false
+  if (name.includes("\\") || name.includes("..")) return false
+  if (name.split("/").some((part) => part.length === 0 || part === "." || part === "..")) return false
+  return true
+}
+
+function buildAgentMarkdown(input: { description?: string; mode: "primary" | "subagent" | "all"; prompt?: string }) {
+  const lines: string[] = []
+  lines.push("---")
+  if (input.description) {
+    const safe = input.description.replace(/\r?\n/g, " ").trim()
+    if (safe) lines.push(`description: ${JSON.stringify(safe)}`)
+  }
+  lines.push(`mode: ${input.mode}`)
+  lines.push("permission:")
+  lines.push("  question: allow")
+  lines.push("---")
+  const body = input.prompt?.trim()
+  if (body) {
+    lines.push("")
+    lines.push(body)
+  }
+  return lines.join("\n") + "\n"
+}
 
 export function tui(input: {
   url: string
@@ -370,6 +402,149 @@ function App() {
       category: "Agent",
       onSelect: () => {
         dialog.replace(() => <DialogAgent />)
+      },
+    },
+    {
+      title: "Create custom Agent",
+      value: "agent.create",
+      category: "Agent",
+      onSelect: async () => {
+        dialog.clear()
+        const nameRaw = await DialogPrompt.show(dialog, "Create Agent", {
+          placeholder: "Name (e.g. writer or team/writer)",
+        })
+        const name = nameRaw?.trim().replace(/\.md$/i, "") ?? ""
+        if (!name) {
+          dialog.clear()
+          return
+        }
+        if (!isValidAgentName(name)) {
+          toast.show({
+            variant: "warning",
+            message: "Invalid agent name",
+            duration: 3000,
+          })
+          dialog.clear()
+          return
+        }
+
+        const descriptionRaw = await DialogPrompt.show(dialog, "Agent description (optional)", {
+          placeholder: "Short description",
+        })
+        const promptRaw =
+          process.env["VISUAL"] || process.env["EDITOR"]
+            ? await Editor.open({ value: "", renderer })
+            : await DialogPrompt.show(dialog, "Agent prompt (optional)", {
+                placeholder: "Paste prompt text (multi-line paste supported)",
+              })
+
+        const out = path.join(process.cwd(), ".opencode", "agent", ...name.split("/")) + ".md"
+        const exists = await Bun.file(out).exists()
+        if (exists) {
+          toast.show({
+            variant: "warning",
+            message: `Agent already exists: ${name}`,
+            duration: 3000,
+          })
+          dialog.clear()
+          return
+        }
+
+        await fs
+          .mkdir(path.dirname(out), { recursive: true })
+          .then(() =>
+            Bun.write(
+              out,
+              buildAgentMarkdown({
+                description: descriptionRaw?.trim() || undefined,
+                mode: "primary",
+                prompt: promptRaw ?? undefined,
+              }),
+            ),
+          )
+          .then(async () => {
+            await sdk.client.instance.dispose()
+            await sync.bootstrap()
+            local.agent.set(name)
+            toast.show({
+              variant: "info",
+              message: `Created agent: ${name}`,
+              duration: 3000,
+            })
+          })
+          .catch(toast.error)
+          .finally(() => {
+            dialog.clear()
+          })
+      },
+    },
+    {
+      title: "Edit custom Agent",
+      value: "agent.edit",
+      category: "Agent",
+      onSelect: async () => {
+        dialog.clear()
+        const options = local.agent
+          .list()
+          .filter((x) => !x.native)
+          .map((x) => ({
+            title: x.name,
+            value: x.name,
+            description: x.description,
+          }))
+
+        if (options.length === 0) {
+          toast.show({
+            variant: "warning",
+            message: "No custom agents found",
+            duration: 3000,
+          })
+          dialog.clear()
+          return
+        }
+
+        const selected = await new Promise<string | null>((resolve) => {
+          dialog.replace(
+            () => (
+              <DialogSelect
+                title="Edit custom Agent"
+                options={options}
+                onSelect={(opt) => {
+                  resolve(opt.value)
+                  dialog.clear()
+                }}
+              />
+            ),
+            () => resolve(null),
+          )
+        })
+
+        if (!selected) {
+          dialog.clear()
+          return
+        }
+
+        const filepath = path.join(process.cwd(), ".opencode", "agent", ...selected.split("/")) + ".md"
+
+        if (process.env["VISUAL"] || process.env["EDITOR"]) {
+          await Editor.openFile({ filepath, renderer })
+          await sdk.client.instance.dispose()
+          await sync.bootstrap()
+          local.agent.set(selected)
+          toast.show({
+            variant: "info",
+            message: `Updated agent: ${selected}`,
+            duration: 3000,
+          })
+          return
+        }
+
+        await open(filepath).catch(() => {})
+        toast.show({
+          variant: "info",
+          message: `Opened agent file: ${selected}`,
+          duration: 3000,
+        })
       },
     },
     {

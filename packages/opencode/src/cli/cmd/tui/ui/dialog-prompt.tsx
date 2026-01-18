@@ -2,8 +2,9 @@ import { TextareaRenderable, TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "./dialog"
 import { onMount, type JSX } from "solid-js"
-import { useKeyboard } from "@opentui/solid"
 import { Clipboard } from "@tui/util/clipboard"
+import { useTextareaKeybindings } from "../component/textarea-keybindings"
+import { useRenderer } from "@opentui/solid"
 
 export type DialogPromptProps = {
   title: string
@@ -17,28 +18,14 @@ export type DialogPromptProps = {
 export function DialogPrompt(props: DialogPromptProps) {
   const dialog = useDialog()
   const { theme } = useTheme()
+  const renderer = useRenderer()
   let textarea: TextareaRenderable
-
-  useKeyboard(async (evt) => {
-    if (evt.name === "return") {
-      props.onConfirm?.(textarea.plainText)
-    }
-    if (evt.name === "v" && (evt.ctrl || evt.meta)) {
-      evt.preventDefault()
-      const content = await Clipboard.read()
-      if (content?.mime === "text/plain" && content.data) {
-        textarea.insertText(content.data)
-        setTimeout(() => {
-          textarea.getLayoutNode().markDirty()
-          textarea.gotoBufferEnd()
-        }, 0)
-      }
-    }
-  })
+  const textareaKeybindings = useTextareaKeybindings()
 
   onMount(() => {
     dialog.setSize("medium")
     setTimeout(() => {
+      renderer.currentFocusedRenderable?.blur()
       textarea.focus()
     }, 1)
     textarea.gotoLineEnd()
@@ -58,8 +45,27 @@ export function DialogPrompt(props: DialogPromptProps) {
           onSubmit={() => {
             props.onConfirm?.(textarea.plainText)
           }}
-          height={3}
-          keyBindings={[{ name: "return", action: "submit" }]}
+          minHeight={3}
+          maxHeight={12}
+          keyBindings={textareaKeybindings()}
+          onKeyDown={async (e) => {
+            if (e.name === "escape") {
+              e.preventDefault()
+              props.onCancel?.()
+              return
+            }
+            if (e.name === "v" && (e.ctrl || e.meta)) {
+              const content = await Clipboard.read()
+              if (content?.mime === "text/plain" && content.data) {
+                e.preventDefault()
+                textarea.insertText(Clipboard.sanitizeTextForTuiInput(content.data))
+                setTimeout(() => {
+                  textarea.getLayoutNode().markDirty()
+                  textarea.gotoBufferEnd()
+                }, 0)
+              }
+            }
+          }}
           ref={(val: TextareaRenderable) => (textarea = val)}
           initialValue={props.value}
           placeholder={props.placeholder ?? "Enter text"}

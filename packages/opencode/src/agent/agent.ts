@@ -93,6 +93,27 @@ export namespace Agent {
         mode: "primary",
         native: true,
       },
+      doc: {
+        name: "doc",
+        description: "Documentation-focused agent for writing and editing documentation files.",
+        options: {},
+        permission: PermissionNext.merge(
+          defaults,
+          PermissionNext.fromConfig({
+            question: "allow",
+            edit: {
+              "*": "deny",
+              "*.md": "allow",
+              "*.mdx": "allow",
+              "*.rst": "allow",
+              "*.txt": "allow",
+            },
+          }),
+          user,
+        ),
+        mode: "primary",
+        native: true,
+      },
       general: {
         name: "general",
         description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,

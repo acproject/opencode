@@ -145,3 +145,30 @@ mkdir -p  ~/workspace/react_project/opencode/.bun-cache && TMPDIR=/tmp BUN_INSTA
 ```sh
 TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun run --cwd packages/desktop tauri build
 ```
+
+
+### 通过文件或者JSON添加MCP服务
+
+- 从文件导入（JSON/JSONC 都行）写入项目配置：
+
+```sh
+opencode mcp import --json '{"mcp":{"alpha":{"type":"local","command":["node","/path/mcp_bridge.js"],"enabled":true}}}' --project --overwrite
+```
+
+- 从内联 JSON 导入，写入项目配置并允许覆盖已有同名 server：
+
+```sh
+opencode mcp import --json '{"mcp":{"alpha":{"type":"local","command":["node","/path/mcp_bridge.js"],"enabled":true}}}' --project --overwrite
+```
+
+- 只导入单个条目（输入不是 map，用 --name 指定名字）：
+
+```sh
+opencode mcp import --name remote1 --json '{"type":"remote","url":"https://example.com/mcp","oauth":false,"enabled":true}' --project
+```
+
+- 只打印（不写文件，打印时会把 oauth.clientSecret 打码为 REDACTED ）：
+
+```sh
+opencode mcp import --file ./mcp.jsonc --print
+```
