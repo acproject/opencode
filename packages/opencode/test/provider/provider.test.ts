@@ -41,7 +41,7 @@ test("provider loaded from env variable", async () => {
   })
 })
 
-test("owiseman loads models from /api/v1/ollama/models", async () => {
+test("owiseman loads models from /v1/models", async () => {
   const originalFetch = globalThis.fetch
   let sawModelsRequest = false
 
@@ -53,13 +53,17 @@ test("owiseman loads models from /api/v1/ollama/models", async () => {
           ? input.toString()
           : ((input as Request).url ?? String(input))
 
-    if (url === "https://www.owiseman.com/api/v1/ollama/models") {
+    if (url === "https://www.owiseman.com/v1/models") {
       sawModelsRequest = true
       const headers = new Headers(init?.headers)
       expect(headers.get("api-key")).toBe("test-api-key")
       return new Response(
         JSON.stringify({
-          models: [{ name: "llama3:8b" }, { model: "qwen2.5:7b" }],
+          object: "list",
+          data: [
+            { id: "ollama:llama3:8b", object: "model", created: 1700000000, owned_by: "ollama" },
+            { id: "ollama:qwen2.5:7b", object: "model", created: 1700000000, owned_by: "ollama" },
+          ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       )
@@ -88,8 +92,8 @@ test("owiseman loads models from /api/v1/ollama/models", async () => {
       fn: async () => {
         const providers = await Provider.list()
         expect(providers["owiseman"]).toBeDefined()
-        expect(Object.keys(providers["owiseman"].models)).toContain("llama3:8b")
-        expect(Object.keys(providers["owiseman"].models)).toContain("qwen2.5:7b")
+        expect(Object.keys(providers["owiseman"].models)).toContain("ollama:llama3:8b")
+        expect(Object.keys(providers["owiseman"].models)).toContain("ollama:qwen2.5:7b")
       },
     })
   } finally {

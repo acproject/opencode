@@ -380,6 +380,7 @@ export namespace Server {
             const response = await fetch(url, {
               method: "POST",
               headers: {
+                ...(apiKey ? { "api-key": apiKey } : {}),
                 "Content-Type": "application/json",
                 "User-Agent": Installation.USER_AGENT,
               },
@@ -455,6 +456,7 @@ export namespace Server {
             const response = await fetch(url, {
               method: "POST",
               headers: {
+                ...(apiKey ? { "api-key": apiKey } : {}),
                 "Content-Type": "application/json",
                 "User-Agent": Installation.USER_AGENT,
               },

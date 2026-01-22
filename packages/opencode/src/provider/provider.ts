@@ -1040,6 +1040,15 @@ export namespace Provider {
         Env.get("OWISEMAN_BASE_URL") ??
         "https://www.owiseman.com"
 
+      const baseURLNormalized = baseURL.endsWith("/") ? baseURL.slice(0, -1) : baseURL
+      const baseRoot = (() => {
+        if (baseURLNormalized.endsWith("/api/v1")) return baseURLNormalized.slice(0, -7)
+        if (baseURLNormalized.endsWith("/v1")) return baseURLNormalized.slice(0, -3)
+        return baseURLNormalized
+      })()
+      const baseURLV1 = `${baseRoot}/v1`
+      const baseURLInference = baseURLNormalized.endsWith("/api/v1") ? `${baseRoot}/api/v1` : baseURLV1
+
       const templateModel = input.models["nemotron-3-nano:30b"] ?? Object.values(input.models)[0]
       const templateCapabilities =
         templateModel?.capabilities ??
@@ -1055,37 +1064,25 @@ export namespace Provider {
       const templateLimit = templateModel?.limit ?? ({ context: 128000, output: 4096 } as any)
       const templateReleaseDate = templateModel?.release_date ?? "2026-01-01"
 
-      function extractModelNames(payload: any): string[] {
-        const list: any = Array.isArray(payload)
-          ? payload
-          : Array.isArray(payload?.models)
-            ? payload.models
-            : Array.isArray(payload?.data)
-              ? payload.data
-              : []
-
-        const out: string[] = []
-        for (const item of list) {
-          if (typeof item === "string") {
-            out.push(item)
-            continue
-          }
-          const name =
-            (typeof item?.name === "string" ? item.name : undefined) ??
-            (typeof item?.model === "string" ? item.model : undefined) ??
-            (typeof item?.id === "string" ? item.id : undefined)
-          if (name) out.push(name)
-        }
-        return Array.from(new Set(out)).filter(Boolean)
+      function extractModelIDs(payload: any): string[] {
+        const list: any[] = Array.isArray(payload?.data) ? payload.data : []
+        const ids = list
+          .map((item) => {
+            if (typeof item?.id === "string") return item.id
+            return undefined
+          })
+          .filter((v): v is string => typeof v === "string" && v.length > 0)
+        return Array.from(new Set(ids))
       }
 
       if (apiKey) {
         const discovered = await (async () => {
           try {
-            const url = new URL("/api/v1/ollama/models", baseURL).toString()
+            const url = `${baseURLV1}/models`
             const response = await fetch(url, {
               method: "GET",
               headers: {
+                Authorization: `Bearer ${apiKey}`,
                 "api-key": apiKey,
                 "User-Agent": Installation.USER_AGENT,
               },
@@ -1099,7 +1096,7 @@ export namespace Provider {
             } catch {
               parsed = undefined
             }
-            return extractModelNames(parsed)
+            return extractModelIDs(parsed)
           } catch {
             return []
           }
@@ -1112,11 +1109,11 @@ export namespace Provider {
             providerID: input.id,
             api: {
               id: modelID,
-              url: baseURL,
+              url: baseURLInference,
               npm: "@ai-sdk/openai-compatible",
             },
             name: modelID,
-            family: "ollama",
+            family: "openai-compatible",
             capabilities: templateCapabilities,
             cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
             limit: templateLimit,
@@ -1129,320 +1126,26 @@ export namespace Provider {
         }
       }
 
-      function headersToRecord(headers: Headers): Record<string, string> {
-        const out: Record<string, string> = {}
-        headers.forEach((value, key) => {
-          out[key] = value
-        })
-        return out
-      }
-
-      class OwisemanOllamaChatModel implements CoreLanguageModelV2 {
-        readonly specificationVersion = "v2"
-        readonly modelId: string
-        readonly supportedUrls: Record<string, RegExp[]> = {}
-        private readonly cfg: { baseURL: string; apiKey?: string }
-
-        constructor(modelId: string, cfg: { baseURL: string; apiKey?: string }) {
-          this.modelId = modelId
-          this.cfg = cfg
-        }
-
-        get provider(): string {
-          return "owiseman.ollama"
-        }
-
-        private toOllamaMessages(prompt: LanguageModelV2Prompt) {
-          return prompt.map((msg) => {
-            const content =
-              typeof msg.content === "string"
-                ? msg.content
-                : msg.content
-                    .map((part: any) => {
-                      if (part?.type === "text") return String(part.text ?? "")
-                      return ""
-                    })
-                    .join("")
-            const role =
-              msg.role === "system" || msg.role === "user" || msg.role === "assistant" || msg.role === "tool"
-                ? msg.role
-                : "user"
-            return {
-              role,
-              content,
-            }
-          })
-        }
-
-        private async callOllama({
-          stream,
-          prompt,
-          headers,
-          abortSignal,
-        }: {
-          stream: boolean
-          prompt: LanguageModelV2Prompt
-          headers?: Record<string, string | undefined>
-          abortSignal?: AbortSignal
-        }) {
-          const mergedHeaders = new Headers()
-          for (const [k, v] of Object.entries(headers ?? {})) {
-            if (v == null) continue
-            mergedHeaders.set(k, v)
-          }
-          mergedHeaders.set("Content-Type", "application/json")
-          mergedHeaders.set("User-Agent", Installation.USER_AGENT)
-
-          const body = {
-            "api-key": this.cfg.apiKey,
-            model: this.modelId || "nemotron-3-nano:30b",
-            messages: this.toOllamaMessages(prompt),
-            stream,
-          }
-
-          const url = new URL("/api/v1/ollama/chat", this.cfg.baseURL).toString()
-          const response = await fetch(url, {
-            method: "POST",
-            headers: mergedHeaders,
-            body: JSON.stringify(body),
-            signal: abortSignal,
-          })
-          return { response, body }
-        }
-
-        async doGenerate(
-          options: Parameters<CoreLanguageModelV2["doGenerate"]>[0],
-        ): Promise<Awaited<ReturnType<CoreLanguageModelV2["doGenerate"]>>> {
-          const warnings: LanguageModelV2CallWarning[] = []
-
-          if (!this.cfg.apiKey) {
-            throw new APICallError({
-              message: "Missing owiseman api key",
-              url: new URL("/api/v1/ollama/chat", this.cfg.baseURL).toString(),
-              requestBodyValues: {},
-              statusCode: 401,
-              isRetryable: false,
-            })
-          }
-
-          const { response, body } = await this.callOllama({
-            stream: false,
-            prompt: options.prompt,
-            headers: options.headers,
-            abortSignal: options.abortSignal,
-          })
-
-          const rawText = await response.text()
-          if (!response.ok) {
-            throw new APICallError({
-              message: `Owiseman request failed (${response.status})`,
-              url: response.url,
-              requestBodyValues: body,
-              statusCode: response.status,
-              responseHeaders: headersToRecord(response.headers),
-              responseBody: rawText,
-              isRetryable: response.status >= 500,
-            })
-          }
-
-          let parsed: any
-          try {
-            parsed = JSON.parse(rawText)
-          } catch {
-            parsed = undefined
-          }
-
-          const text: string =
-            (parsed?.message && typeof parsed.message.content === "string" ? parsed.message.content : undefined) ??
-            (typeof parsed?.response === "string" ? parsed.response : "") ??
-            ""
-
-          const content: LanguageModelV2Content[] = [{ type: "text", text }]
-
-          const inputTokens: number | undefined =
-            typeof parsed?.prompt_eval_count === "number" ? parsed.prompt_eval_count : undefined
-          const outputTokens: number | undefined =
-            typeof parsed?.eval_count === "number" ? parsed.eval_count : undefined
-
-          const usage: LanguageModelV2Usage = {
-            inputTokens,
-            outputTokens,
-            totalTokens:
-              typeof inputTokens === "number" && typeof outputTokens === "number"
-                ? inputTokens + outputTokens
-                : undefined,
-          }
-
-          const finishReason: LanguageModelV2FinishReason = "stop"
-
-          return {
-            content,
-            finishReason,
-            usage,
-            request: { body },
-            response: {
-              id: typeof parsed?.id === "string" ? parsed.id : undefined,
-              timestamp: new Date(typeof parsed?.created_at === "string" ? parsed.created_at : Date.now()),
-              modelId: typeof parsed?.model === "string" ? parsed.model : this.modelId,
-              headers: headersToRecord(response.headers),
-              body: rawText,
-            },
-            providerMetadata: {} satisfies SharedV2ProviderMetadata,
-            warnings,
-          }
-        }
-
-        async doStream(
-          options: Parameters<CoreLanguageModelV2["doStream"]>[0],
-        ): Promise<Awaited<ReturnType<CoreLanguageModelV2["doStream"]>>> {
-          const warnings: LanguageModelV2CallWarning[] = []
-
-          if (!this.cfg.apiKey) {
-            throw new APICallError({
-              message: "Missing owiseman api key",
-              url: new URL("/api/v1/ollama/chat", this.cfg.baseURL).toString(),
-              requestBodyValues: {},
-              statusCode: 401,
-              isRetryable: false,
-            })
-          }
-
-          const { response, body } = await this.callOllama({
-            stream: true,
-            prompt: options.prompt,
-            headers: options.headers,
-            abortSignal: options.abortSignal,
-          })
-
-          if (!response.ok) {
-            const rawText = await response.text().catch(() => "")
-            throw new APICallError({
-              message: `Owiseman request failed (${response.status})`,
-              url: response.url,
-              requestBodyValues: body,
-              statusCode: response.status,
-              responseHeaders: headersToRecord(response.headers),
-              responseBody: rawText,
-              isRetryable: response.status >= 500,
-            })
-          }
-
-          let currentTextId: string | null = null
-          let finishReason: LanguageModelV2FinishReason = "unknown"
-          const usage: LanguageModelV2Usage = {
-            inputTokens: undefined,
-            outputTokens: undefined,
-            totalTokens: undefined,
-          }
-
-          const stream = new ReadableStream<LanguageModelV2StreamPart>({
-            async start(controller) {
-              controller.enqueue({ type: "stream-start", warnings })
-
-              const reader = response.body?.getReader()
-              if (!reader) {
-                finishReason = "error"
-                controller.enqueue({
-                  type: "finish",
-                  finishReason,
-                  usage,
-                  providerMetadata: {} satisfies SharedV2ProviderMetadata,
-                })
-                controller.close()
-                return
-              }
-
-              const decoder = new TextDecoder()
-              let buffer = ""
-              let isDone = false
-
-              while (true) {
-                const { value, done } = await reader.read()
-                if (done) break
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split("\n")
-                buffer = lines.pop() ?? ""
-
-                for (const line of lines) {
-                  const trimmed = line.trim()
-                  if (!trimmed) continue
-                  if (options.includeRawChunks) controller.enqueue({ type: "raw", rawValue: trimmed })
-
-                  let chunk: any
-                  try {
-                    chunk = JSON.parse(trimmed)
-                  } catch (e) {
-                    finishReason = "error"
-                    controller.enqueue({ type: "error", error: e })
-                    continue
-                  }
-
-                  const delta: string | undefined =
-                    (chunk?.message && typeof chunk.message.content === "string" ? chunk.message.content : undefined) ??
-                    (typeof chunk?.response === "string" ? chunk.response : undefined)
-
-                  if (delta) {
-                    if (!currentTextId) {
-                      currentTextId = "owiseman-text"
-                      controller.enqueue({ type: "text-start", id: currentTextId, providerMetadata: {} })
-                    }
-                    controller.enqueue({ type: "text-delta", id: currentTextId, delta })
-                  }
-
-                  if (chunk?.done === true) {
-                    isDone = true
-                    finishReason = "stop"
-                    const inTok = typeof chunk?.prompt_eval_count === "number" ? chunk.prompt_eval_count : undefined
-                    const outTok = typeof chunk?.eval_count === "number" ? chunk.eval_count : undefined
-                    usage.inputTokens = inTok
-                    usage.outputTokens = outTok
-                    usage.totalTokens =
-                      typeof inTok === "number" && typeof outTok === "number" ? inTok + outTok : undefined
-                    break
-                  }
-                }
-
-                if (isDone) break
-              }
-
-              if (currentTextId) {
-                controller.enqueue({ type: "text-end", id: currentTextId })
-                currentTextId = null
-              }
-
-              controller.enqueue({
-                type: "finish",
-                finishReason,
-                usage,
-                providerMetadata: {} satisfies SharedV2ProviderMetadata,
-              })
-              controller.close()
-            },
-          })
-
-          return {
-            stream,
-            request: { body },
-            response: { headers: headersToRecord(response.headers) },
-          }
-        }
-      }
-
       return {
         autoload: Boolean(apiKey),
         options: {
-          baseURL,
-          owisemanApiKey: apiKey,
-        },
-        async getModel(_sdk: any, modelID: string, options?: Record<string, any>) {
-          const cfgBaseURL = typeof options?.baseURL === "string" ? options.baseURL : baseURL
-          const cfgApiKey =
-            typeof options?.owisemanApiKey === "string"
-              ? options.owisemanApiKey
-              : typeof options?.apiKey === "string"
-                ? options.apiKey
-                : apiKey
-          return new OwisemanOllamaChatModel(modelID, { baseURL: cfgBaseURL, apiKey: cfgApiKey })
+          baseURL: baseURLInference,
+          fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+            const raw =
+              typeof input === "string"
+                ? input
+                : input instanceof URL
+                  ? input.toString()
+                  : ((input as Request).url ?? String(input))
+            try {
+              const url = new URL(raw)
+              if (url.pathname === "/chat/completions") url.pathname = "/v1/chat/completions"
+              return fetch(url.toString(), init)
+            } catch {
+              return fetch(input, init)
+            }
+          },
+          ...(apiKey ? { apiKey, headers: { "api-key": apiKey } } : {}),
         },
       }
     },
