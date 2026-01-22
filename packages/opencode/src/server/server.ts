@@ -319,6 +319,10 @@ export namespace Server {
                 ...(apiKey ? { "api-key": apiKey } : {}),
                 "User-Agent": Installation.USER_AGENT,
               },
+              signal: c.req.raw.signal,
+            }).catch((e) => {
+              if (e instanceof Error && e.name === "AbortError") return new Response(null, { status: 499 })
+              throw e
             })
             const text = await response.text()
             return new Response(text, {
@@ -385,6 +389,10 @@ export namespace Server {
                 "User-Agent": Installation.USER_AGENT,
               },
               body: JSON.stringify(payload),
+              signal: c.req.raw.signal,
+            }).catch((e) => {
+              if (e instanceof Error && e.name === "AbortError") return new Response(null, { status: 499 })
+              throw e
             })
 
             if (streamEnabled) {
@@ -461,6 +469,10 @@ export namespace Server {
                 "User-Agent": Installation.USER_AGENT,
               },
               body: JSON.stringify(payload),
+              signal: c.req.raw.signal,
+            }).catch((e) => {
+              if (e instanceof Error && e.name === "AbortError") return new Response(null, { status: 499 })
+              throw e
             })
 
             if (streamEnabled) {

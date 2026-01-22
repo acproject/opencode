@@ -102,6 +102,8 @@ describe("owiseman ollama passthrough endpoints", () => {
             expect(String(input)).toBe("https://www.owiseman.com/api/v1/ollama/chat")
             expect(init?.method).toBe("POST")
             expect(init?.headers).toMatchObject({ "Content-Type": "application/json" })
+            expect(init?.signal).toBeDefined()
+            expect((init?.signal as AbortSignal).aborted).toBe(false)
             const parsed = JSON.parse(String(init?.body ?? "null"))
             expect(parsed["api-key"]).toBe("test-key")
             expect(parsed.model).toBe("nemotron-3-nano:30b")
@@ -141,6 +143,8 @@ describe("owiseman ollama passthrough endpoints", () => {
         try {
           globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
             expect(String(input)).toBe("https://www.owiseman.com/api/v1/ollama/chat")
+            expect(init?.signal).toBeDefined()
+            expect((init?.signal as AbortSignal).aborted).toBe(false)
             const parsed = JSON.parse(String(init?.body ?? "null"))
             expect(parsed["api-key"]).toBe("request-key")
             return new Response(JSON.stringify({ ok: true }), {
@@ -179,6 +183,8 @@ describe("owiseman ollama passthrough endpoints", () => {
           globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
             expect(String(input)).toBe("https://www.owiseman.com/api/v1/ollama/chat")
             expect(init?.method).toBe("POST")
+            expect(init?.signal).toBeDefined()
+            expect((init?.signal as AbortSignal).aborted).toBe(false)
             const parsed = JSON.parse(String(init?.body ?? "null"))
             expect(parsed["api-key"]).toBe("test-key")
             expect(parsed.model).toBe("nemotron-3-nano:30b")
@@ -219,6 +225,8 @@ describe("owiseman ollama passthrough endpoints", () => {
           globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
             expect(String(input)).toBe("https://www.owiseman.com/api/v1/ollama/generate")
             expect(init?.method).toBe("POST")
+            expect(init?.signal).toBeDefined()
+            expect((init?.signal as AbortSignal).aborted).toBe(false)
             const parsed = JSON.parse(String(init?.body ?? "null"))
             expect(parsed["api-key"]).toBe("test-key")
             expect(parsed.model).toBe("nemotron-3-nano:30b")
@@ -259,6 +267,8 @@ describe("owiseman ollama passthrough endpoints", () => {
           globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
             expect(String(input)).toBe("https://www.owiseman.com/api/v1/ollama/models")
             expect(init?.method).toBe("GET")
+            expect(init?.signal).toBeDefined()
+            expect((init?.signal as AbortSignal).aborted).toBe(false)
             const headers = new Headers(init?.headers)
             expect(headers.get("api-key")).toBe("test-key")
             return new Response(JSON.stringify({ models: ["m1"] }), {
