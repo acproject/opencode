@@ -54,6 +54,15 @@ export function DialogPrompt(props: DialogPromptProps) {
               props.onCancel?.()
               return
             }
+            if (e.name === "return" && (e.shift || e.meta)) {
+              e.preventDefault()
+              textarea.insertText("\n")
+              setTimeout(() => {
+                textarea.getLayoutNode().markDirty()
+                renderer.requestRender()
+              }, 0)
+              return
+            }
             if (e.name === "v" && (e.ctrl || e.meta)) {
               const content = await Clipboard.read()
               if (content?.mime === "text/plain" && content.data) {

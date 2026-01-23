@@ -797,6 +797,15 @@ export function Prompt(props: PromptProps) {
                   e.preventDefault()
                   return
                 }
+                if (e.name === "return" && (e.shift || e.meta)) {
+                  e.preventDefault()
+                  input.insertText("\n")
+                  setTimeout(() => {
+                    input.getLayoutNode().markDirty()
+                    renderer.requestRender()
+                  }, 0)
+                  return
+                }
                 // Handle clipboard paste (Ctrl+V) - check for images first on Windows
                 // This is needed because Windows terminal doesn't properly send image data
                 // through bracketed paste, so we need to intercept the keypress and
