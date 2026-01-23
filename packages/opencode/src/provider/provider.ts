@@ -1126,6 +1126,9 @@ export namespace Provider {
         }
       }
 
+      let xSessionID: string | undefined
+      let lastUserMessage: unknown | undefined
+
       return {
         autoload: Boolean(apiKey),
         options: {
@@ -1140,7 +1143,47 @@ export namespace Provider {
             try {
               const url = new URL(raw)
               if (url.pathname === "/chat/completions") url.pathname = "/v1/chat/completions"
-              return fetch(url.toString(), init)
+              const isChatCompletions = url.pathname === "/v1/chat/completions" || url.pathname === "/api/v1/chat/completions"
+              const headers = new Headers(init?.headers)
+              if (xSessionID) headers.set("x-session-id", xSessionID)
+
+              let body = init?.body
+              if (xSessionID && isChatCompletions && typeof init?.body === "string") {
+                try {
+                  const payload = JSON.parse(init.body)
+                  if (payload && typeof payload === "object") {
+                    delete payload.session_id
+                    delete payload.sessionId
+                    delete payload.use_server_history
+                    delete payload.useServerHistory
+                    const messages = Array.isArray(payload.messages) ? payload.messages : undefined
+                    if (messages) {
+                      const userMsg = [...messages].reverse().find((m) => m && typeof m === "object" && m.role === "user")
+                      if (userMsg) {
+                        lastUserMessage = userMsg
+                        payload.messages = [userMsg]
+                      } else if (lastUserMessage) {
+                        payload.messages = [lastUserMessage]
+                      }
+                      body = JSON.stringify(payload)
+                    }
+                  }
+                } catch {}
+              } else if (!xSessionID && isChatCompletions && typeof init?.body === "string") {
+                try {
+                  const payload = JSON.parse(init.body)
+                  const messages = Array.isArray(payload?.messages) ? payload.messages : undefined
+                  if (messages) {
+                    const userMsg = [...messages].reverse().find((m) => m && typeof m === "object" && m.role === "user")
+                    if (userMsg) lastUserMessage = userMsg
+                  }
+                } catch {}
+              }
+
+              const response = await fetch(url.toString(), { ...init, headers, body })
+              const nextSession = response.headers.get("x-session-id") ?? undefined
+              if (nextSession && nextSession !== xSessionID) xSessionID = nextSession
+              return response
             } catch {
               return fetch(input, init)
             }

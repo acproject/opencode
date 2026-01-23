@@ -80,9 +80,14 @@ export namespace SessionProcessor {
                 case "reasoning-delta":
                   if (value.id in reasoningMap) {
                     const part = reasoningMap[value.id]
-                    part.text += value.text
+                    const before = part.text
+                    const incoming = value.text ?? ""
+                    const isCumulative = incoming.length > 0 && incoming.startsWith(before)
+                    const delta = isCumulative ? incoming.slice(before.length) : incoming
+                    if (isCumulative) part.text = incoming
+                    else part.text += incoming
                     if (value.providerMetadata) part.metadata = value.providerMetadata
-                    if (part.text) await Session.updatePart({ part, delta: value.text })
+                    if (delta.length > 0) await Session.updatePart({ part, delta })
                   }
                   break
 
@@ -303,12 +308,17 @@ export namespace SessionProcessor {
 
                 case "text-delta":
                   if (currentText) {
-                    currentText.text += value.text
+                    const before = currentText.text
+                    const incoming = value.text ?? ""
+                    const isCumulative = incoming.length > 0 && incoming.startsWith(before)
+                    const delta = isCumulative ? incoming.slice(before.length) : incoming
+                    if (isCumulative) currentText.text = incoming
+                    else currentText.text += incoming
                     if (value.providerMetadata) currentText.metadata = value.providerMetadata
-                    if (currentText.text)
+                    if (delta.length > 0)
                       await Session.updatePart({
                         part: currentText,
-                        delta: value.text,
+                        delta,
                       })
                   }
                   break

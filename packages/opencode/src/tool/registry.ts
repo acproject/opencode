@@ -106,6 +106,7 @@ export namespace ToolRegistry {
       TerminalTool,
       ReadTool,
       alias(ReadTool, "readFile"),
+      alias(ReadTool, "read_file"),
       GlobTool,
       GrepTool,
       EditTool,
