@@ -68,6 +68,7 @@ export function useTextareaKeybindings() {
       { name: "return", action: "submit" },
       { name: "return", shift: true, action: "newline" },
       { name: "return", meta: true, action: "newline" },
+      { name: "return", super: true, action: "newline" },
       ...TEXTAREA_ACTIONS.flatMap((action) => mapTextareaKeybindings(keybinds, action)),
     ] satisfies KeyBinding[]
   })

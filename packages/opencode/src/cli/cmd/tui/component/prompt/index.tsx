@@ -797,7 +797,12 @@ export function Prompt(props: PromptProps) {
                   e.preventDefault()
                   return
                 }
-                if (e.name === "return" && (e.shift || e.meta)) {
+                if (
+                  (e.name === "return" && (e.shift || e.meta || e.super)) ||
+                  (e.name === "j" && e.ctrl) ||
+                  e.name === "\n" ||
+                  (e.sequence === "\n" && e.ctrl)
+                ) {
                   e.preventDefault()
                   input.insertText("\n")
                   setTimeout(() => {

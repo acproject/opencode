@@ -54,7 +54,12 @@ export function DialogPrompt(props: DialogPromptProps) {
               props.onCancel?.()
               return
             }
-            if (e.name === "return" && (e.shift || e.meta)) {
+            if (
+              (e.name === "return" && (e.shift || e.meta || e.super)) ||
+              (e.name === "j" && e.ctrl) ||
+              e.name === "\n" ||
+              (e.sequence === "\n" && e.ctrl)
+            ) {
               e.preventDefault()
               textarea.insertText("\n")
               setTimeout(() => {
