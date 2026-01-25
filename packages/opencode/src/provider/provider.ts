@@ -1049,18 +1049,26 @@ export namespace Provider {
       const baseURLV1 = `${baseRoot}/v1`
       const baseURLInference = baseURLNormalized.endsWith("/api/v1") ? `${baseRoot}/api/v1` : baseURLV1
 
+      const toolcallOption =
+        cfg.provider?.["owiseman"]?.options?.toolcall ??
+        cfg.provider?.["owiseman"]?.options?.toolCall ??
+        (cfg.provider?.["owiseman"]?.options?.toolCallMode === "prompt" ? true : undefined) ??
+        (cfg.provider?.["owiseman"]?.options?.promptToolCall === true ? true : undefined)
+      const toolcallEnabled = toolcallOption ?? true
+
       const templateModel = input.models["nemotron-3-nano:30b"] ?? Object.values(input.models)[0]
-      const templateCapabilities =
-        templateModel?.capabilities ??
-        ({
+      const templateCapabilities = {
+        ...(templateModel?.capabilities ?? {
           temperature: true,
           reasoning: false,
           attachment: false,
-          toolcall: false,
+          toolcall: toolcallEnabled,
           input: { text: true, audio: false, image: false, video: false, pdf: false },
           output: { text: true, audio: false, image: false, video: false, pdf: false },
           interleaved: false,
-        } as any)
+        }),
+        toolcall: toolcallEnabled,
+      } as any
       const templateLimit = templateModel?.limit ?? ({ context: 128000, output: 4096 } as any)
       const templateReleaseDate = templateModel?.release_date ?? "2026-01-01"
 
@@ -1384,7 +1392,7 @@ export namespace Provider {
               temperature: true,
               reasoning: false,
               attachment: false,
-              toolcall: false,
+              toolcall: true,
               input: { text: true, audio: false, image: false, video: false, pdf: false },
               output: { text: true, audio: false, image: false, video: false, pdf: false },
               interleaved: false,
