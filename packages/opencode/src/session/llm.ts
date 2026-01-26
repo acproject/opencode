@@ -96,6 +96,12 @@ export namespace LLM {
     const provider = await Provider.getProvider(input.model.providerID)
     const auth = await Auth.get(input.model.providerID)
     const isCodex = provider.id === "openai" && auth?.type === "oauth"
+    const localAiRuntime =
+      provider.options?.["localAiRuntime"] === true ||
+      provider.options?.["local_ai_runtime"] === true ||
+      provider.options?.["localAIRuntime"] === true
+    const useRuntimeTools =
+      localAiRuntime && (input.model.api.npm === "@ai-sdk/openai-compatible" || input.model.api.npm === "custom")
 
     const variant =
       !input.small && input.model.variants && input.user.variant ? input.model.variants[input.user.variant] : {}
@@ -142,11 +148,13 @@ export namespace LLM {
         )
 
     const resolvedTools = await resolveTools(input)
-    const tools = input.model.capabilities.toolcall ? resolvedTools : {}
+    const tools = input.model.capabilities.toolcall && !useRuntimeTools ? resolvedTools : undefined
+    const activeTools = tools ? Object.keys(tools).filter((x) => x !== "invalid") : undefined
     l.info("tools", {
       toolcall: input.model.capabilities.toolcall,
-      toolCount: Object.keys(tools).length,
-      activeToolCount: Object.keys(tools).filter((x) => x !== "invalid").length,
+      toolCount: tools ? Object.keys(tools).length : 0,
+      activeToolCount: activeTools?.length ?? 0,
+      runtimeTools: useRuntimeTools,
     })
 
     const baseArgs: Parameters<typeof streamText>[0] = {
@@ -157,7 +165,7 @@ export namespace LLM {
       },
       async experimental_repairToolCall(failed) {
         const lower = failed.toolCall.toolName.toLowerCase()
-        if (lower !== failed.toolCall.toolName && tools[lower]) {
+        if (tools && lower !== failed.toolCall.toolName && tools[lower]) {
           l.info("repairing tool call", {
             tool: failed.toolCall.toolName,
             repaired: lower,
@@ -180,8 +188,7 @@ export namespace LLM {
       topP: params.topP,
       topK: params.topK,
       providerOptions: ProviderTransform.providerOptions(input.model, params.options),
-      activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
-      tools,
+      ...(tools ? { activeTools, tools } : {}),
       maxOutputTokens,
       abortSignal: input.abort,
       headers: {
