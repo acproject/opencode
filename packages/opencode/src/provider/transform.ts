@@ -438,6 +438,24 @@ export namespace ProviderTransform {
   ): Record<string, any> {
     const result: Record<string, any> = {}
 
+    const localAiRuntime =
+      providerOptions?.["localAiRuntime"] === true ||
+      providerOptions?.["local_ai_runtime"] === true ||
+      providerOptions?.["localAIRuntime"] === true
+    const isOpenAICompatible = model.api.npm === "@ai-sdk/openai-compatible" || model.api.npm === "custom"
+    if (localAiRuntime && isOpenAICompatible) {
+      result["session_id"] = sessionID
+      result["use_server_history"] = true
+      result["tool_choice"] = "auto"
+      result["tools"] = [
+        { type: "function", function: { name: "ide.diagnostics" } },
+        { type: "function", function: { name: "ide.hover" } },
+        { type: "function", function: { name: "ide.definition" } },
+        { type: "function", function: { name: "ide.read_file" } },
+        { type: "function", function: { name: "ide.search" } },
+      ]
+    }
+
     if (model.api.npm === "@openrouter/ai-sdk-provider") {
       result["usage"] = {
         include: true,
@@ -514,6 +532,11 @@ export namespace ProviderTransform {
 
   export function providerOptions(model: Provider.Model, options: { [x: string]: any }) {
     switch (model.api.npm) {
+      case "@ai-sdk/openai-compatible":
+      case "custom":
+        return {
+          ["openaiCompatible" as string]: options,
+        }
       case "@ai-sdk/github-copilot":
       case "@ai-sdk/openai":
       case "@ai-sdk/azure":
