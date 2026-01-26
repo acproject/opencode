@@ -96,6 +96,7 @@ export namespace LSP {
         log.info("all LSPs are disabled")
         return {
           broken: new Set<string>(),
+          errors: new Map<string, { root: string; serverID: string; message: string }>(),
           servers,
           clients,
           spawning: new Map<string, Promise<LSPClient.Info | undefined>>(),
@@ -145,6 +146,7 @@ export namespace LSP {
 
       return {
         broken: new Set<string>(),
+        errors: new Map<string, { root: string; serverID: string; message: string }>(),
         servers,
         clients,
         spawning: new Map<string, Promise<LSPClient.Info | undefined>>(),
@@ -167,6 +169,7 @@ export namespace LSP {
       name: z.string(),
       root: z.string(),
       status: z.union([z.literal("connected"), z.literal("error")]),
+      message: z.string().optional(),
     })
     .meta({
       ref: "LSPStatus",
@@ -184,6 +187,19 @@ export namespace LSP {
           status: "connected",
         })
       }
+      for (const error of x.errors.values()) {
+        const alreadyConnected = x.clients.some(
+          (client) => client.serverID === error.serverID && client.root === error.root,
+        )
+        if (alreadyConnected) continue
+        result.push({
+          id: error.serverID,
+          name: x.servers[error.serverID]?.id ?? error.serverID,
+          root: path.relative(Instance.directory, error.root),
+          status: "error",
+          message: error.message,
+        })
+      }
       return result
     })
   }
@@ -193,15 +209,32 @@ export namespace LSP {
     const extension = path.parse(file).ext || file
     const result: LSPClient.Info[] = []
 
+    const setError = (input: { server: LSPServer.Info; root: string; key: string; error: unknown }) => {
+      s.broken.add(input.key)
+      s.errors.set(input.key, {
+        root: input.root,
+        serverID: input.server.id,
+        message: input.error instanceof Error ? input.error.message : String(input.error),
+      })
+      Bus.publish(Event.Updated, {})
+    }
+
     async function schedule(server: LSPServer.Info, root: string, key: string) {
       const handle = await server
         .spawn(root)
         .then((value) => {
-          if (!value) s.broken.add(key)
+          if (!value) {
+            setError({
+              server,
+              root,
+              key,
+              error: "LSP server unavailable",
+            })
+          }
           return value
         })
         .catch((err) => {
-          s.broken.add(key)
+          setError({ server, root, key, error: err })
           log.error(`Failed to spawn LSP server ${server.id}`, { error: err })
           return undefined
         })
@@ -214,7 +247,7 @@ export namespace LSP {
         server: handle,
         root,
       }).catch((err) => {
-        s.broken.add(key)
+        setError({ server, root, key, error: err })
         handle.process.kill()
         log.error(`Failed to initialize LSP client ${server.id}`, { error: err })
         return undefined
@@ -231,6 +264,7 @@ export namespace LSP {
         return existing
       }
 
+      s.errors.delete(key)
       s.clients.push(client)
       return client
     }

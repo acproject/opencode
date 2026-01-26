@@ -31,6 +31,21 @@ export namespace FileTime {
     return state().read[sessionID]?.[file]
   }
 
+  export function latestRead(sessionID: string) {
+    const reads = state().read[sessionID]
+    if (!reads) return
+    let latestFile: string | undefined
+    let latestTime = 0
+    for (const [file, time] of Object.entries(reads)) {
+      if (!time) continue
+      const timestamp = time.getTime()
+      if (timestamp <= latestTime) continue
+      latestTime = timestamp
+      latestFile = file
+    }
+    return latestFile
+  }
+
   export async function withLock<T>(filepath: string, fn: () => Promise<T>): Promise<T> {
     const current = state()
     const currentLock = current.locks.get(filepath) ?? Promise.resolve()

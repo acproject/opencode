@@ -1,5 +1,7 @@
 import z from "zod"
 import { Tool } from "./tool"
+import { LSP } from "../lsp"
+import { FileTime } from "../file/time"
 import DESCRIPTION_WRITE from "./todowrite.txt"
 import { Todo } from "../session/todo"
 
@@ -20,6 +22,10 @@ export const TodoWriteTool = Tool.define("todowrite", {
       sessionID: ctx.sessionID,
       todos: params.todos,
     })
+    const recentFile = FileTime.latestRead(ctx.sessionID)
+    if (recentFile && (await Bun.file(recentFile).exists())) {
+      await LSP.touchFile(recentFile, false, ctx.sessionID)
+    }
     return {
       title: `${params.todos.filter((x) => x.status !== "completed").length} todos`,
       output: JSON.stringify(params.todos, null, 2),

@@ -97,18 +97,37 @@ export namespace LSPServer {
     extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
     async spawn(root) {
       const tsserver = await Bun.resolve("typescript/lib/tsserver.js", Instance.directory).catch(() => {})
-      log.info("typescript server", { tsserver })
-      if (!tsserver) return
-      const proc = spawn(BunProc.which(), ["x", "typescript-language-server", "--stdio"], {
-        cwd: root,
-        env: getLspEnvironment(),
-      })
+      const ext = process.platform === "win32" ? ".cmd" : ""
+      const localBin = path.join(root, "node_modules", ".bin", "typescript-language-server" + ext)
+      let bin: string | undefined
+      if (await Bun.file(localBin).exists()) bin = localBin
+      if (!bin) {
+        const found = Bun.which("typescript-language-server")
+        if (found) bin = found
+      }
+      let proc: ChildProcessWithoutNullStreams
+      if (bin) {
+        proc = spawn(bin, ["--stdio"], {
+          cwd: root,
+          env: getLspEnvironment(),
+        })
+      } else {
+        if (Flag.OPENCODE_DISABLE_LSP_DOWNLOAD) return
+        proc = spawn(BunProc.which(), ["x", "typescript-language-server", "--stdio"], {
+          cwd: root,
+          env: getLspEnvironment(),
+        })
+      }
       return {
         process: proc,
         initialization: {
-          tsserver: {
-            path: tsserver,
-          },
+          ...(tsserver
+            ? {
+                tsserver: {
+                  path: tsserver,
+                },
+              }
+            : {}),
         },
       }
     },
