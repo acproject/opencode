@@ -147,9 +147,12 @@ export namespace LLM {
           OUTPUT_TOKEN_MAX,
         )
 
-    const resolvedTools = await resolveTools(input)
-    const tools = input.model.capabilities.toolcall && !useRuntimeTools ? resolvedTools : undefined
-    const activeTools = tools ? Object.keys(tools).filter((x) => x !== "invalid") : undefined
+    let tools: Record<string, Tool> | undefined
+    let activeTools: string[] | undefined
+    if (input.model.capabilities.toolcall && !useRuntimeTools) {
+      tools = await resolveTools(input)
+      activeTools = Object.keys(tools).filter((x) => x !== "invalid")
+    }
     l.info("tools", {
       toolcall: input.model.capabilities.toolcall,
       toolCount: tools ? Object.keys(tools).length : 0,
