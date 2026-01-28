@@ -64,12 +64,19 @@ export namespace LSPClient {
       l.info("window/workDoneProgress/create", params)
       return null
     })
-    connection.onRequest("workspace/configuration", async () => {
-      // Return server initialization options
-      return [input.server.initialization ?? {}]
+    connection.onRequest("workspace/configuration", async (params) => {
+      const items = (params as any)?.items
+      if (!Array.isArray(items) || items.length === 0) return []
+      const initialization = input.server.initialization ?? {}
+      return items.map((item: any) => {
+        const section = typeof item?.section === "string" ? item.section : undefined
+        if (!section) return initialization
+        const bySection = (initialization as any)?.[section]
+        return bySection === undefined ? initialization : bySection
+      })
     })
-    connection.onRequest("client/registerCapability", async () => {})
-    connection.onRequest("client/unregisterCapability", async () => {})
+    connection.onRequest("client/registerCapability", async () => null)
+    connection.onRequest("client/unregisterCapability", async () => null)
     connection.onRequest("workspace/workspaceFolders", async () => [
       {
         name: "workspace",
@@ -98,6 +105,7 @@ export namespace LSPClient {
           },
           workspace: {
             configuration: true,
+            workspaceFolders: true,
             didChangeWatchedFiles: {
               dynamicRegistration: true,
             },
@@ -146,33 +154,34 @@ export namespace LSPClient {
       },
       notify: {
         async open(input: { path: string }) {
-          input.path = path.isAbsolute(input.path) ? input.path : path.resolve(Instance.directory, input.path)
-          const file = Bun.file(input.path)
+          const absolutePath = path.isAbsolute(input.path) ? input.path : path.resolve(Instance.directory, input.path)
+          const normalizedPath = Filesystem.normalizePath(absolutePath)
+          const file = Bun.file(absolutePath)
           const text = await file.text()
-          const extension = path.extname(input.path)
+          const extension = path.extname(absolutePath)
           const languageId = LANGUAGE_EXTENSIONS[extension] ?? "plaintext"
 
-          const version = files[input.path]
+          const version = files[normalizedPath]
           if (version !== undefined) {
             log.info("workspace/didChangeWatchedFiles", input)
             await connection.sendNotification("workspace/didChangeWatchedFiles", {
               changes: [
                 {
-                  uri: pathToFileURL(input.path).href,
+                  uri: pathToFileURL(absolutePath).href,
                   type: 2, // Changed
                 },
               ],
             })
 
             const next = version + 1
-            files[input.path] = next
+            files[normalizedPath] = next
             log.info("textDocument/didChange", {
-              path: input.path,
+              path: absolutePath,
               version: next,
             })
             await connection.sendNotification("textDocument/didChange", {
               textDocument: {
-                uri: pathToFileURL(input.path).href,
+                uri: pathToFileURL(absolutePath).href,
                 version: next,
               },
               contentChanges: [{ text }],
@@ -184,23 +193,23 @@ export namespace LSPClient {
           await connection.sendNotification("workspace/didChangeWatchedFiles", {
             changes: [
               {
-                uri: pathToFileURL(input.path).href,
+                uri: pathToFileURL(absolutePath).href,
                 type: 1, // Created
               },
             ],
           })
 
           log.info("textDocument/didOpen", input)
-          diagnostics.delete(input.path)
+          diagnostics.delete(normalizedPath)
           await connection.sendNotification("textDocument/didOpen", {
             textDocument: {
-              uri: pathToFileURL(input.path).href,
+              uri: pathToFileURL(absolutePath).href,
               languageId,
               version: 0,
               text,
             },
           })
-          files[input.path] = 0
+          files[normalizedPath] = 0
           return
         },
       },
