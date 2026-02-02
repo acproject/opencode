@@ -1221,26 +1221,78 @@ export namespace SessionPrompt {
     if (!text) return []
     if (text.length > 200_000) return []
 
+    const parseMaybeJson = (raw: string) => {
+      const val = raw.trim()
+      if (!val) return ""
+      const first = val[0]
+      const last = val[val.length - 1]
+      const looksJson =
+        (first === "{" && last === "}") ||
+        (first === "[" && last === "]") ||
+        (first === "\"" && last === "\"") ||
+        (first >= "0" && first <= "9") ||
+        first === "-" ||
+        val === "true" ||
+        val === "false" ||
+        val === "null"
+      if (!looksJson) return val
+      try {
+        return JSON.parse(val)
+      } catch {
+        return val
+      }
+    }
+
     const calls: { tool: string; args: Record<string, any> }[] = []
     const toolCallStart = /<tool_call>([^<\s]+)[\s\S]*?(?=<tool_call>|$)/gi
     const argPair = /<arg_key>\s*([^<]+?)\s*<\/arg_key>\s*<arg_value>\s*([\s\S]*?)\s*<\/arg_value>/gi
+    const bareValue = /<arg_value>\s*([\s\S]*?)\s*<\/arg_value>/gi
 
     let match: RegExpExecArray | null
     while ((match = toolCallStart.exec(text))) {
       const tool = (match[1] ?? "").trim()
       if (!tool) continue
-
-      const chunkStart = match.index
-      const nextIdx = toolCallStart.lastIndex
-      const chunk = text.slice(chunkStart, nextIdx)
+      const chunk = match[0] ?? ""
 
       const args: Record<string, any> = {}
+      argPair.lastIndex = 0
       let m2: RegExpExecArray | null
       while ((m2 = argPair.exec(chunk))) {
         const key = (m2[1] ?? "").trim()
         const valRaw = (m2[2] ?? "").trim()
         if (!key) continue
-        args[key] = valRaw
+        args[key] = parseMaybeJson(valRaw)
+      }
+
+      if (Object.keys(args).length === 0) {
+        const values: string[] = []
+        bareValue.lastIndex = 0
+        let mv: RegExpExecArray | null
+        while ((mv = bareValue.exec(chunk))) {
+          const v = (mv[1] ?? "").trim()
+          if (v) values.push(v)
+        }
+
+        if (values.length === 1) {
+          const parsed = parseMaybeJson(values[0]!)
+          if (tool === "todowrite" && Array.isArray(parsed)) {
+            args.todos = parsed
+          } else if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            Object.assign(args, parsed as any)
+          } else if (tool === "todowrite") {
+            args.todos = parsed
+          } else {
+            args.value = parsed
+          }
+        } else if (values.length >= 2 && values.length % 2 === 0) {
+          for (let i = 0; i < values.length; i += 2) {
+            const k = (values[i] ?? "").trim()
+            if (!k) continue
+            args[k] = parseMaybeJson(values[i + 1] ?? "")
+          }
+        } else if (values.length >= 1 && tool === "todowrite") {
+          args.todos = parseMaybeJson(values[0]!)
+        }
       }
 
       calls.push({ tool, args })
