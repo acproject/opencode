@@ -314,6 +314,12 @@ export namespace MessageV2 {
     }),
     system: z.string().optional(),
     tools: z.record(z.string(), z.boolean()).optional(),
+    orchestrator: z
+      .object({
+        maxSteps: z.number().int().positive().optional(),
+        maxToolCalls: z.number().int().positive().optional(),
+      })
+      .optional(),
     variant: z.string().optional(),
   }).meta({
     ref: "UserMessage",

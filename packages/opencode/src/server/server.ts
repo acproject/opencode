@@ -63,6 +63,113 @@ export namespace Server {
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
 
+  const OpenAIMessage = z
+    .object({
+      role: z.string(),
+      content: z.any().optional(),
+    })
+    .passthrough()
+
+  const OpenAIChatCompletionsInput = z
+    .object({
+      model: z.string(),
+      messages: z.array(OpenAIMessage),
+      stream: z.boolean().optional(),
+      max_tokens: z.number().int().positive().optional(),
+      tools: z.array(z.any()).optional(),
+      tool_choice: z.any().optional(),
+      session_id: z.string().optional(),
+      use_server_history: z.boolean().optional(),
+      trace: z.boolean().optional(),
+      max_steps: z.number().int().positive().optional(),
+      max_tool_calls: z.number().int().positive().optional(),
+    })
+    .passthrough()
+
+  async function resolveDefaultModel(): Promise<{ providerID: string; modelID: string } | undefined> {
+    const providers = await Provider.list()
+    const best = Object.values(providers)
+      .flatMap((p) => Object.values(p.models))
+      .toSorted((a, b) => {
+        if (a.providerID !== b.providerID) return a.providerID.localeCompare(b.providerID)
+        return a.id.localeCompare(b.id)
+      })[0]
+    if (!best) return undefined
+    return { providerID: best.providerID, modelID: best.id }
+  }
+
+  async function resolveModel(model: string): Promise<{ providerID: string; modelID: string }> {
+    const trimmed = model.trim()
+    if (!trimmed) {
+      const fallback = await resolveDefaultModel()
+      if (fallback) return fallback
+      throw new Error("No models available")
+    }
+    const colon = trimmed.indexOf(":")
+    if (colon > 0) {
+      const providerID = trimmed.slice(0, colon)
+      const modelID = trimmed.slice(colon + 1)
+      if (providerID && modelID) return { providerID, modelID }
+    }
+    const slash = trimmed.indexOf("/")
+    if (slash > 0) {
+      const providerID = trimmed.slice(0, slash)
+      const modelID = trimmed.slice(slash + 1)
+      if (providerID && modelID) return { providerID, modelID }
+    }
+    const fallback = await resolveDefaultModel()
+    if (fallback) return fallback
+    throw new Error("No models available")
+  }
+
+  function extractTextContent(content: unknown): string {
+    if (typeof content === "string") return content
+    if (!Array.isArray(content)) return ""
+    const texts: string[] = []
+    for (const item of content) {
+      if (typeof item === "string") {
+        texts.push(item)
+        continue
+      }
+      if (item && typeof item === "object" && (item as any).type === "text" && typeof (item as any).text === "string") {
+        texts.push((item as any).text)
+      }
+    }
+    return texts.join("")
+  }
+
+  async function resolveSessionID(openaiSessionID: string | undefined): Promise<{ openai: string; opencode: string }> {
+    const openai = openaiSessionID?.trim() || `sess-${Date.now().toString(36)}`
+    const key = ["openai_session", Instance.project.id, openai]
+    const existing = await Storage.read<{ sessionID: string }>(key).catch(() => undefined)
+    if (existing?.sessionID) {
+      const ok = await Session.get(existing.sessionID).then(() => true).catch(() => false)
+      if (ok) return { openai, opencode: existing.sessionID }
+    }
+    const created = await Session.createNext({ directory: Instance.directory })
+    await Storage.write(key, { sessionID: created.id })
+    return { openai, opencode: created.id }
+  }
+
+  function requestedToolNames(tools: unknown): string[] {
+    if (!Array.isArray(tools)) return []
+    const out: string[] = []
+    for (const item of tools) {
+      if (!item || typeof item !== "object") continue
+      const name =
+        (typeof (item as any).name === "string" ? (item as any).name : undefined) ??
+        (typeof (item as any)?.function?.name === "string" ? (item as any).function.name : undefined)
+      if (name) out.push(name)
+    }
+    return Array.from(new Set(out))
+  }
+
+  function toolChoiceIsNone(toolChoice: unknown): boolean {
+    if (toolChoice === "none") return true
+    if (toolChoice && typeof toolChoice === "object" && (toolChoice as any).type === "none") return true
+    return false
+  }
+
   export function url(): URL {
     return _url ?? new URL("http://localhost:4096")
   }
@@ -276,6 +383,165 @@ export namespace Server {
               openapi: "3.1.1",
             },
           }),
+        )
+        .get(
+          "/v1/models",
+          describeRoute({
+            summary: "List models (OpenAI compatible)",
+            description: "List models in an OpenAI-compatible format.",
+            operationId: "openai.models",
+            responses: {
+              200: {
+                description: "Model list",
+                content: {
+                  "application/json": {
+                    schema: resolver(
+                      z.object({
+                        object: z.literal("list"),
+                        data: z.array(
+                          z.object({
+                            id: z.string(),
+                            object: z.literal("model"),
+                            created: z.number(),
+                            owned_by: z.string(),
+                          }),
+                        ),
+                      }),
+                    ),
+                  },
+                },
+              },
+            },
+          }),
+          async (c) => {
+            const providers = await Provider.list()
+            const models = Object.values(providers)
+              .flatMap((p) => Object.values(p.models))
+              .map((m) => `${m.providerID}:${m.id}`)
+              .toSorted()
+              .map((id) => ({
+                id,
+                object: "model" as const,
+                created: 0,
+                owned_by: "opencode",
+              }))
+            return c.json({ object: "list", data: models })
+          },
+        )
+        .post(
+          "/v1/chat/completions",
+          describeRoute({
+            summary: "Chat completions (OpenAI compatible)",
+            description: "OpenAI-compatible chat completions endpoint.",
+            operationId: "openai.chat.completions",
+            responses: {
+              200: {
+                description: "Chat completion",
+                content: {
+                  "application/json": { schema: resolver(z.any()) },
+                  "text/event-stream": { schema: resolver(z.any()) },
+                },
+              },
+              ...errors(400),
+            },
+          }),
+          validator("json", OpenAIChatCompletionsInput),
+          async (c) => {
+            const body = c.req.valid("json")
+            const ids = await resolveSessionID(body.session_id)
+            c.header("x-session-id", ids.openai)
+
+            const model = await resolveModel(body.model)
+
+            const systemText = body.messages
+              .filter((m) => m.role === "system")
+              .map((m) => extractTextContent(m.content))
+              .filter((x) => x)
+              .join("\n\n")
+
+            const lastUser = body.messages.findLast((m) => m.role === "user")
+            const userText = extractTextContent(lastUser?.content)
+
+            const toolNames = requestedToolNames(body.tools)
+            const denyAll = toolChoiceIsNone(body.tool_choice) || toolNames.length === 0
+            const permissions: PermissionNext.Ruleset = [
+              { permission: "*", pattern: "*", action: denyAll ? "deny" : "ask" },
+              ...toolNames.map((name) => ({ permission: name, pattern: "*", action: "allow" as const })),
+            ]
+            await Session.update(ids.opencode, (draft) => {
+              draft.permission = permissions
+            }).catch(() => {})
+
+            const result = await SessionPrompt.prompt({
+              sessionID: ids.opencode,
+              model,
+              ...(systemText ? { system: systemText } : {}),
+              ...(((body.max_steps ?? 0) > 0 || (body.max_tool_calls ?? 0) > 0) && !toolChoiceIsNone(body.tool_choice)
+                ? {
+                    orchestrator: {
+                      maxSteps: body.max_steps,
+                      maxToolCalls: body.max_tool_calls,
+                    },
+                  }
+                : {}),
+              parts: [{ type: "text", text: userText || "" }],
+            })
+
+            const text = result.parts
+              .filter((p): p is MessageV2.TextPart => p.type === "text")
+              .filter((p) => !p.ignored)
+              .map((p) => p.text)
+              .join("")
+
+            const payload = {
+              id: `chatcmpl_${Date.now().toString(36)}`,
+              object: "chat.completion",
+              created: Math.floor(Date.now() / 1000),
+              model: body.model,
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: text },
+                  finish_reason: "stop",
+                },
+              ],
+            }
+
+            if (body.trace === true) {
+              c.header(
+                "x-runtime-trace",
+                JSON.stringify({
+                  session_id: ids.openai,
+                  opencode_session_id: ids.opencode,
+                  model,
+                  tools: toolNames,
+                }),
+              )
+            }
+
+            if (body.stream === true) {
+              return streamSSE(c, async (stream) => {
+                stream.writeSSE({
+                  data: JSON.stringify({
+                    id: payload.id,
+                    object: "chat.completion.chunk",
+                    created: payload.created,
+                    model: payload.model,
+                    choices: [
+                      {
+                        index: 0,
+                        delta: { content: text },
+                        finish_reason: null,
+                      },
+                    ],
+                  }),
+                })
+                stream.writeSSE({ data: "[DONE]" })
+              })
+            }
+
+            return c.json(payload)
+          },
         )
         .use(validator("query", z.object({ directory: z.string().optional() })))
 

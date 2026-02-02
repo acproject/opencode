@@ -42,6 +42,7 @@ export namespace LLM {
     retries?: number
     orchestrator?: {
       maxSteps?: number
+      maxToolCalls?: number
       stopWhen?: StopCondition<any> | StopCondition<any>[]
     }
     step?: {
@@ -174,6 +175,28 @@ export namespace LLM {
     if (input.model.capabilities.toolcall && !useRuntimeTools) {
       tools = await resolveTools(input)
       activeTools = Object.keys(tools).filter((x) => x !== "invalid")
+    }
+
+    if (tools && input.orchestrator?.maxToolCalls !== undefined && input.orchestrator.maxToolCalls > 0) {
+      const maxToolCalls = input.orchestrator.maxToolCalls
+      let toolCalls = 0
+      const wrapped: Record<string, Tool> = {}
+      for (const [name, t] of Object.entries(tools)) {
+        wrapped[name] = {
+          ...t,
+          async execute(args, options) {
+            toolCalls++
+            if (toolCalls > maxToolCalls) {
+              throw new Error(`max_tool_calls exceeded: ${maxToolCalls}`)
+            }
+            if (!t.execute) {
+              throw new Error(`tool has no execute(): ${name}`)
+            }
+            return t.execute(args, options)
+          },
+        }
+      }
+      tools = wrapped
     }
     l.info("tools", {
       toolcall: input.model.capabilities.toolcall,

@@ -99,6 +99,12 @@ export namespace SessionPrompt {
       .optional(),
     agent: z.string().optional(),
     noReply: z.boolean().optional(),
+    orchestrator: z
+      .object({
+        maxSteps: z.number().int().positive().optional(),
+        maxToolCalls: z.number().int().positive().optional(),
+      })
+      .optional(),
     tools: z
       .record(z.string(), z.boolean())
       .optional()
@@ -515,7 +521,7 @@ export namespace SessionPrompt {
 
       // normal processing
       const agent = await Agent.get(lastUser.agent)
-      const maxSteps = agent.steps ?? Infinity
+      const maxSteps = lastUser.orchestrator?.maxSteps ?? agent.steps ?? Infinity
       const isLastStep = step >= maxSteps
       msgs = insertReminders({
         messages: msgs,
@@ -600,6 +606,14 @@ export namespace SessionPrompt {
         agent,
         abort,
         sessionID,
+        ...(lastUser.orchestrator
+          ? {
+              orchestrator: {
+                maxSteps: lastUser.orchestrator.maxSteps,
+                maxToolCalls: lastUser.orchestrator.maxToolCalls,
+              },
+            }
+          : {}),
         system: [
           ...(await SystemPrompt.environment()),
           ...(await SystemPrompt.custom()),
@@ -1219,6 +1233,7 @@ export namespace SessionPrompt {
         created: Date.now(),
       },
       tools: input.tools,
+      orchestrator: input.orchestrator,
       agent: agent.name,
       model: input.model ?? agent.model ?? (await lastModel(input.sessionID)),
       system: input.system,
