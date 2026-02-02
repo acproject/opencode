@@ -96,18 +96,40 @@ export namespace LLM {
     const provider = await Provider.getProvider(input.model.providerID)
     const auth = await Auth.get(input.model.providerID)
     const isCodex = provider.id === "openai" && auth?.type === "oauth"
+    const providerBaseUrl = (() => {
+      const raw = provider.options?.["baseURL"] ?? provider.options?.["api"] ?? input.model.api.url
+      if (typeof raw !== "string" || raw.trim().length === 0) return undefined
+      try {
+        return new URL(raw)
+      } catch {
+        try {
+          return new URL(`http://${raw}`)
+        } catch {
+          return undefined
+        }
+      }
+    })()
+    const autoLocalAiRuntime = (() => {
+      if (!providerBaseUrl) return false
+      const hostOk = providerBaseUrl.hostname === "127.0.0.1" || providerBaseUrl.hostname === "localhost"
+      if (!hostOk) return false
+      const port = Number(providerBaseUrl.port)
+      return port === 18080 || port === 18081
+    })()
     const localAiRuntime =
+      autoLocalAiRuntime ||
       provider.options?.["localAiRuntime"] === true ||
       provider.options?.["local_ai_runtime"] === true ||
       provider.options?.["localAIRuntime"] === true
     const useRuntimeTools =
       localAiRuntime && (input.model.api.npm === "@ai-sdk/openai-compatible" || input.model.api.npm === "custom")
+    const providerOptions = localAiRuntime ? { ...provider.options, localAiRuntime: true } : provider.options
 
     const variant =
       !input.small && input.model.variants && input.user.variant ? input.model.variants[input.user.variant] : {}
     const base = input.small
       ? ProviderTransform.smallOptions(input.model)
-      : ProviderTransform.options(input.model, input.sessionID, provider.options)
+      : ProviderTransform.options(input.model, input.sessionID, providerOptions)
     const options: Record<string, any> = pipe(
       base,
       mergeDeep(input.model.options),
