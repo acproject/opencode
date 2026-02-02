@@ -144,6 +144,10 @@ mkdir -p  ~/workspace/react_project/opencode/.bun-cache && TMPDIR=/tmp BUN_INSTA
 * 开始打包
 ```sh
 TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun run --cwd packages/desktop tauri build
+
+
+BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun install      
+BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun run --cwd packages/opencode ./script/build.ts --single
 ```
 
 
