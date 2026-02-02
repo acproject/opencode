@@ -263,15 +263,35 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           save()
         },
         set(model: { providerID: string; modelID: string }, options?: { recent?: boolean }) {
-          batch(() => {
-            if (!isModelValid(model)) {
-              toast.show({
-                message: `Model ${model.providerID}/${model.modelID} is not valid`,
-                variant: "warning",
-                duration: 3000,
+          if (!isModelValid(model)) {
+            iife(async () => {
+              await sdk.client.instance.dispose()
+              await sync.bootstrap()
+              if (!isModelValid(model)) {
+                toast.show({
+                  message: `Model ${model.providerID}/${model.modelID} is not valid`,
+                  variant: "warning",
+                  duration: 3000,
+                })
+                return
+              }
+              batch(() => {
+                setModelStore("model", agent.current().name, model)
+                if (options?.recent) {
+                  const uniq = uniqueBy([model, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
+                  if (uniq.length > 10) uniq.pop()
+                  setModelStore(
+                    "recent",
+                    uniq.map((x) => ({ providerID: x.providerID, modelID: x.modelID })),
+                  )
+                  save()
+                }
               })
-              return
-            }
+            })
+            return
+          }
+
+          batch(() => {
             setModelStore("model", agent.current().name, model)
             if (options?.recent) {
               const uniq = uniqueBy([model, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
