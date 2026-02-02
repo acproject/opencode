@@ -1243,21 +1243,82 @@ export namespace SessionPrompt {
       }
     }
 
+    const parseKeyValuePairs = (input: string) => {
+      const out: Record<string, any> = {}
+      const re = /([A-Za-z0-9_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s<]+))/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(input))) {
+        const key = (m[1] ?? "").trim()
+        const raw = (m[2] ?? m[3] ?? m[4] ?? "").trim()
+        if (!key) continue
+        out[key] = parseMaybeJson(raw)
+      }
+      return out
+    }
+
+    const normalizeTerminalCommand = (raw: unknown) => {
+      if (typeof raw !== "string") return
+      let s = raw.trim()
+      if (!s) return
+      if (s.startsWith("-")) {
+        s = s.slice(1).trim()
+      }
+      if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+        s = s.slice(1, -1).trim()
+      }
+      if (!s) return
+      return s
+    }
+
     const calls: { tool: string; args: Record<string, any> }[] = []
-    const toolCallStart = /<tool_call>([^<\s]+)[\s\S]*?(?=<tool_call>|$)/gi
+    const toolCallBlock = /<tool_call\b([^>]*)>([\s\S]*?)<\/tool_call>/gi
     const argPair = /<arg_key>\s*([^<]+?)\s*<\/arg_key>\s*<arg_value>\s*([\s\S]*?)\s*<\/arg_value>/gi
     const bareValue = /<arg_value>\s*([\s\S]*?)\s*<\/arg_value>/gi
 
-    let match: RegExpExecArray | null
-    while ((match = toolCallStart.exec(text))) {
-      const tool = (match[1] ?? "").trim()
-      if (!tool) continue
-      const chunk = match[0] ?? ""
+    const blocks: { attrs: string; body: string; raw: string }[] = []
+    let mb: RegExpExecArray | null
+    while ((mb = toolCallBlock.exec(text))) {
+      blocks.push({ attrs: mb[1] ?? "", body: mb[2] ?? "", raw: mb[0] ?? "" })
+    }
 
+    const legacyFallback = () => {
+      const out: { tool: string; args: Record<string, any> }[] = []
+      const toolCallStart = /<tool_call>([^<\s]+)[\s\S]*?(?=<tool_call>|$)/gi
+      let match: RegExpExecArray | null
+      while ((match = toolCallStart.exec(text))) {
+        out.push({ tool: (match[1] ?? "").trim(), args: {} })
+      }
+      return out
+    }
+
+    const inputs = blocks.length ? blocks : legacyFallback().map((x) => ({ attrs: "", body: "", raw: "" }))
+    for (const block of inputs) {
       const args: Record<string, any> = {}
+      const attrs = block.attrs ? parseKeyValuePairs(block.attrs) : {}
+      Object.assign(args, attrs)
+
+      const bodyText = block.body || block.raw
+      const bodyTrimmed = (bodyText ?? "").trim()
+
+      let tool = ""
+      const explicitTool = typeof args.tool === "string" ? args.tool : typeof args.name === "string" ? args.name : undefined
+      if (explicitTool && explicitTool.trim()) {
+        tool = explicitTool.trim()
+        delete args.tool
+        delete args.name
+      } else if (bodyTrimmed) {
+        const firstToken = bodyTrimmed.split(/\s+/)[0] ?? ""
+        if (firstToken && !firstToken.includes("=") && !firstToken.startsWith("<")) {
+          tool = firstToken.trim()
+        }
+      }
+
+      const bodyForArgs = tool && bodyTrimmed.startsWith(tool) ? bodyTrimmed.slice(tool.length).trim() : bodyTrimmed
+      Object.assign(args, parseKeyValuePairs(bodyForArgs))
+
       argPair.lastIndex = 0
       let m2: RegExpExecArray | null
-      while ((m2 = argPair.exec(chunk))) {
+      while ((m2 = argPair.exec(bodyForArgs))) {
         const key = (m2[1] ?? "").trim()
         const valRaw = (m2[2] ?? "").trim()
         if (!key) continue
@@ -1268,22 +1329,16 @@ export namespace SessionPrompt {
         const values: string[] = []
         bareValue.lastIndex = 0
         let mv: RegExpExecArray | null
-        while ((mv = bareValue.exec(chunk))) {
+        while ((mv = bareValue.exec(bodyForArgs))) {
           const v = (mv[1] ?? "").trim()
           if (v) values.push(v)
         }
-
         if (values.length === 1) {
           const parsed = parseMaybeJson(values[0]!)
-          if (tool === "todowrite" && Array.isArray(parsed)) {
-            args.todos = parsed
-          } else if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            Object.assign(args, parsed as any)
-          } else if (tool === "todowrite") {
-            args.todos = parsed
-          } else {
-            args.value = parsed
-          }
+          if (tool === "todowrite" && Array.isArray(parsed)) args.todos = parsed
+          else if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) Object.assign(args, parsed as any)
+          else if (tool === "todowrite") args.todos = parsed
+          else args.value = parsed
         } else if (values.length >= 2 && values.length % 2 === 0) {
           for (let i = 0; i < values.length; i += 2) {
             const k = (values[i] ?? "").trim()
@@ -1293,6 +1348,27 @@ export namespace SessionPrompt {
         } else if (values.length >= 1 && tool === "todowrite") {
           args.todos = parseMaybeJson(values[0]!)
         }
+      }
+
+      if (!tool) {
+        if (args.cmdterm !== undefined || args.cmd !== undefined || args.command !== undefined) tool = "terminal"
+        else if (args.todos !== undefined) tool = "todowrite"
+        else if ((args.filePath !== undefined || args.path !== undefined) && args.content !== undefined) tool = "write"
+      }
+      if (!tool) continue
+
+      if (tool === "terminal") {
+        if (args.command === undefined && typeof args.cmd === "string") {
+          const normalized = normalizeTerminalCommand(args.cmd)
+          if (normalized) args.command = normalized
+        }
+        if (args.command === undefined && typeof args.cmdterm === "string") {
+          const normalized = normalizeTerminalCommand(args.cmdterm)
+          if (normalized) args.command = normalized
+        }
+        delete args.cmd
+        delete args.cmdterm
+        delete args.shellcommandsafe
       }
 
       calls.push({ tool, args })
