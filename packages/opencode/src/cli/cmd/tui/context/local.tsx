@@ -263,6 +263,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           save()
         },
         set(model: { providerID: string; modelID: string }, options?: { recent?: boolean }) {
+          const previous = currentModel()
           if (!isModelValid(model)) {
             iife(async () => {
               await sdk.client.instance.dispose()
@@ -291,6 +292,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             return
           }
 
+          const changed = previous?.providerID !== model.providerID || previous?.modelID !== model.modelID
           batch(() => {
             setModelStore("model", agent.current().name, model)
             if (options?.recent) {
@@ -303,6 +305,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               save()
             }
           })
+
+          if (changed && sync.ready && (model.providerID === "owiseman" || previous?.providerID !== model.providerID)) {
+            iife(async () => {
+              await sdk.client.instance.dispose()
+              await sync.bootstrap()
+            })
+          }
         },
         toggleFavorite(model: { providerID: string; modelID: string }) {
           batch(() => {
