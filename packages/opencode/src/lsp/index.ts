@@ -102,6 +102,7 @@ export namespace LSP {
           spawning: new Map<string, Promise<LSPClient.Info | undefined>>(),
           sessionLeases: new Map<string, Set<string>>(),
           sessionRefCounts: new Map<string, number>(),
+          warmup: undefined as Promise<void> | undefined,
         }
       }
 
@@ -152,6 +153,7 @@ export namespace LSP {
         spawning: new Map<string, Promise<LSPClient.Info | undefined>>(),
         sessionLeases: new Map<string, Set<string>>(),
         sessionRefCounts: new Map<string, number>(),
+        warmup: undefined as Promise<void> | undefined,
       }
     },
     async (state) => {
@@ -178,6 +180,24 @@ export namespace LSP {
 
   export async function status() {
     return state().then((x) => {
+      if (!x.clients.length && !x.errors.size && !x.warmup && Object.keys(x.servers).length) {
+        x.warmup = (async () => {
+          const warmupExtensions = new Set<string>()
+          for (const server of Object.values(x.servers)) {
+            if (server.extensions.length) warmupExtensions.add(server.extensions[0])
+            else warmupExtensions.add(".txt")
+          }
+          await Promise.all(
+            Array.from(warmupExtensions).map(async (ext) => {
+              const synthetic = path.join(Instance.directory, `__opencode_lsp_warmup${ext}`)
+              await getClients(synthetic)
+            }),
+          )
+        })().catch((err) => {
+          log.error("lsp warmup failed", { error: err })
+        })
+      }
+
       const result: Status[] = []
       for (const client of x.clients) {
         result.push({

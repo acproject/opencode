@@ -1001,9 +1001,8 @@ export namespace SessionPrompt {
     abort: AbortSignal
     bypassAgentCheck: boolean
   }) {
-    if (input.model.capabilities.toolcall) return 0
-
     const parts = await MessageV2.parts(input.processor.message.id)
+    if (parts.some((p) => p.type === "tool")) return 0
     const text = parts
       .filter((p): p is MessageV2.TextPart => p.type === "text")
       .filter((p) => !p.ignored)
@@ -1013,8 +1012,9 @@ export namespace SessionPrompt {
 
     const blocks = ConfigMarkdown.fencedCodeBlocks(text).filter((b) => b.lang === "tool")
     const callsFromBlocks = blocks.flatMap((b) => parseToolJson(b.content))
-    const callsFromWholeText = parseToolJson(text)
-    const calls = [...callsFromBlocks, ...callsFromWholeText].slice(0, 5)
+    const callsFromToolCallTags = parseToolCallTags(text)
+    const callsFromWholeText = input.model.capabilities.toolcall ? [] : parseToolJson(text)
+    const calls = [...callsFromBlocks, ...callsFromToolCallTags, ...callsFromWholeText].slice(0, 5)
 
     if (calls.length === 0) return 0
 
@@ -1061,6 +1061,10 @@ export namespace SessionPrompt {
       }
 
       const args = { ...(call.args ?? {}) } as Record<string, any>
+      if (tool.id === "write" && args.filePath === undefined && typeof args.path === "string") {
+        args.filePath = args.path
+        delete args.path
+      }
       if (tool.id === "terminal" && args.ptyID === undefined && lastPtyID) {
         args.ptyID = lastPtyID
       }
@@ -1209,6 +1213,39 @@ export namespace SessionPrompt {
       if (!args || typeof args !== "object") continue
       calls.push({ tool, args })
     }
+    return calls
+  }
+
+  function parseToolCallTags(content: string): { tool: string; args: Record<string, any> }[] {
+    const text = content.trim()
+    if (!text) return []
+    if (text.length > 200_000) return []
+
+    const calls: { tool: string; args: Record<string, any> }[] = []
+    const toolCallStart = /<tool_call>([^<\s]+)[\s\S]*?(?=<tool_call>|$)/gi
+    const argPair = /<arg_key>\s*([^<]+?)\s*<\/arg_key>\s*<arg_value>\s*([\s\S]*?)\s*<\/arg_value>/gi
+
+    let match: RegExpExecArray | null
+    while ((match = toolCallStart.exec(text))) {
+      const tool = (match[1] ?? "").trim()
+      if (!tool) continue
+
+      const chunkStart = match.index
+      const nextIdx = toolCallStart.lastIndex
+      const chunk = text.slice(chunkStart, nextIdx)
+
+      const args: Record<string, any> = {}
+      let m2: RegExpExecArray | null
+      while ((m2 = argPair.exec(chunk))) {
+        const key = (m2[1] ?? "").trim()
+        const valRaw = (m2[2] ?? "").trim()
+        if (!key) continue
+        args[key] = valRaw
+      }
+
+      calls.push({ tool, args })
+    }
+
     return calls
   }
 
