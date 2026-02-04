@@ -1040,14 +1040,19 @@ export namespace Provider {
         Env.get("OWISEMAN_BASE_URL") ??
         "https://www.owiseman.com"
 
+      const configured = Boolean(cfg.provider?.["owiseman"] || Env.get("OWISEMAN_BASE_URL") || apiKey)
+
       const baseURLNormalized = baseURL.endsWith("/") ? baseURL.slice(0, -1) : baseURL
       const baseRoot = (() => {
+        if (baseURLNormalized.endsWith("/api/v1/models")) return baseURLNormalized.slice(0, -13)
+        if (baseURLNormalized.endsWith("/v1/models")) return baseURLNormalized.slice(0, -9)
         if (baseURLNormalized.endsWith("/api/v1")) return baseURLNormalized.slice(0, -7)
         if (baseURLNormalized.endsWith("/v1")) return baseURLNormalized.slice(0, -3)
         return baseURLNormalized
       })()
       const baseURLV1 = `${baseRoot}/v1`
-      const baseURLInference = baseURLNormalized.endsWith("/api/v1") ? `${baseRoot}/api/v1` : baseURLV1
+      const baseURLInference =
+        baseURLNormalized.endsWith("/api/v1") || baseURLNormalized.endsWith("/api/v1/models") ? `${baseRoot}/api/v1` : baseURLV1
 
       const toolcallOption =
         cfg.provider?.["owiseman"]?.options?.toolcall ??
@@ -1083,54 +1088,62 @@ export namespace Provider {
         return Array.from(new Set(ids))
       }
 
-      if (apiKey) {
-        const discovered = await (async () => {
-          try {
-            const url = `${baseURLV1}/models`
-            const response = await fetch(url, {
-              method: "GET",
-              headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "api-key": apiKey,
-                "User-Agent": Installation.USER_AGENT,
-              },
-              signal: AbortSignal.timeout(5000),
-            })
-            const raw = await response.text()
-            if (!response.ok) return []
-            let parsed: any
-            try {
-              parsed = JSON.parse(raw)
-            } catch {
-              parsed = undefined
+      const discovered = configured
+        ? await (async () => {
+            const candidates = Array.from(
+              new Set([`${baseURLInference}/models`, `${baseRoot}/v1/models`, `${baseRoot}/api/v1/models`]),
+            )
+            for (const url of candidates) {
+              try {
+                const headers: Record<string, string> = {
+                  Accept: "application/json",
+                  "User-Agent": Installation.USER_AGENT,
+                }
+                if (apiKey) {
+                  headers["Authorization"] = `Bearer ${apiKey}`
+                  headers["api-key"] = apiKey
+                }
+                const response = await fetch(url, {
+                  method: "GET",
+                  headers,
+                  signal: AbortSignal.timeout(5000),
+                })
+                const raw = await response.text()
+                if (!response.ok) continue
+                let parsed: any
+                try {
+                  parsed = JSON.parse(raw)
+                } catch {
+                  parsed = undefined
+                }
+                const ids = extractModelIDs(parsed)
+                if (ids.length) return ids
+              } catch {}
             }
-            return extractModelIDs(parsed)
-          } catch {
             return []
-          }
-        })()
+          })()
+        : []
 
-        for (const modelID of discovered) {
-          if (input.models[modelID]) continue
-          input.models[modelID] = {
+      for (const modelID of discovered) {
+        if (input.models[modelID]) continue
+        input.models[modelID] = {
+          id: modelID,
+          providerID: input.id,
+          api: {
             id: modelID,
-            providerID: input.id,
-            api: {
-              id: modelID,
-              url: baseURLInference,
-              npm: "@ai-sdk/openai-compatible",
-            },
-            name: modelID,
-            family: "openai-compatible",
-            capabilities: templateCapabilities,
-            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
-            limit: templateLimit,
-            status: "active",
-            options: {},
-            headers: {},
-            release_date: templateReleaseDate,
-            variants: {},
-          }
+            url: baseURLInference,
+            npm: "@ai-sdk/openai-compatible",
+          },
+          name: modelID,
+          family: "openai-compatible",
+          capabilities: templateCapabilities,
+          cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          limit: templateLimit,
+          status: "active",
+          options: {},
+          headers: {},
+          release_date: templateReleaseDate,
+          variants: {},
         }
       }
 
@@ -1138,7 +1151,7 @@ export namespace Provider {
       let lastUserMessage: unknown | undefined
 
       return {
-        autoload: Boolean(apiKey),
+        autoload: configured,
         options: {
           baseURL: baseURLInference,
           fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
