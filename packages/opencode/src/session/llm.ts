@@ -12,6 +12,8 @@ import {
   type ToolSet,
   extractReasoningMiddleware,
 } from "ai"
+import { parse as parseJsonc } from "jsonc-parser"
+import { parse as parsePartialJson } from "partial-json"
 import { clone, mergeDeep, pipe } from "remeda"
 import { ProviderTransform } from "@/provider/transform"
 import { Config } from "@/config/config"
@@ -28,6 +30,48 @@ export namespace LLM {
   const log = Log.create({ service: "llm" })
 
   export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
+
+  function tryParseToolInput(input: unknown): unknown | undefined {
+    if (typeof input !== "string") return input
+    const text = input.trim()
+    if (text.length === 0) return undefined
+    try {
+      return JSON.parse(text)
+    } catch {}
+    try {
+      const errors: any[] = []
+      const value = parseJsonc(text, errors, { allowTrailingComma: true, disallowComments: false })
+      if (errors.length === 0) return value
+    } catch {}
+    try {
+      return parsePartialJson(text)
+    } catch {}
+    return undefined
+  }
+
+  function repairReadArgs(text: string, parsed: unknown): unknown | undefined {
+    const base = (() => {
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return { ...(parsed as any) }
+      return {}
+    })()
+
+    if (typeof (base as any).filePath === "string" && (base as any).filePath.length > 0) return base
+
+    const pathMatch = text.match(/\/[^\n"]+/)
+    if (pathMatch) {
+      const filePath = pathMatch[0].trim().replace(/[}\],]+$/, "")
+      if (filePath.length > 0) (base as any).filePath = filePath
+    }
+
+    const offsetMatch = text.match(/\boffset\s*[:=]\s*(\d+)/i)
+    if (offsetMatch) (base as any).offset = Number(offsetMatch[1])
+
+    const limitMatch = text.match(/\blimit\s*[:=]\s*(\d+)/i)
+    if (limitMatch) (base as any).limit = Number(limitMatch[1])
+
+    if (typeof (base as any).filePath === "string" && (base as any).filePath.length > 0) return base
+    return undefined
+  }
 
   export type StreamInput = {
     user: MessageV2.User
@@ -223,6 +267,38 @@ export namespace LLM {
             toolName: lower,
           }
         }
+
+        const parsed = tryParseToolInput(failed.toolCall.input)
+        if (parsed !== undefined) {
+          if (lower === "read" && typeof failed.toolCall.input === "string") {
+            const repaired = repairReadArgs(failed.toolCall.input, parsed)
+            if (repaired !== undefined) {
+              return {
+                ...failed.toolCall,
+                toolName: lower,
+                input: JSON.stringify(repaired),
+              }
+            }
+          }
+
+          return {
+            ...failed.toolCall,
+            toolName: lower,
+            input: JSON.stringify(parsed),
+          }
+        }
+
+        if (lower === "read" && typeof failed.toolCall.input === "string") {
+          const repaired = repairReadArgs(failed.toolCall.input, undefined)
+          if (repaired !== undefined) {
+            return {
+              ...failed.toolCall,
+              toolName: lower,
+              input: JSON.stringify(repaired),
+            }
+          }
+        }
+
         return {
           ...failed.toolCall,
           input: JSON.stringify({
