@@ -99,7 +99,7 @@ const targets = singleFlag
     })
   : allTargets
 
-await $`rm -rf dist`
+await fs.promises.rm("dist", { recursive: true, force: true })
 
 const binaries: Record<string, string> = {}
 if (!skipInstall) {
@@ -118,7 +118,7 @@ for (const item of targets) {
     .filter(Boolean)
     .join("-")
   console.log(`building ${name}`)
-  await $`mkdir -p dist/${name}/bin`
+  await fs.promises.mkdir(path.join("dist", name, "bin"), { recursive: true })
 
   const parserWorker = (() => {
     const candidates = [
@@ -164,7 +164,7 @@ for (const item of targets) {
     },
   })
 
-  await $`rm -rf ./dist/${name}/bin/tui`
+  await fs.promises.rm(path.join("dist", name, "bin", "tui"), { recursive: true, force: true })
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {
