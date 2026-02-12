@@ -125,6 +125,11 @@ BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun install
 BUN_INSTALL_CACHE_DIR=~/workspace/react_project/opencode/.bun-cache bun run --cwd packages/opencode ./script/build.ts --single
 ```
 
+```powershell
+bun install --frozen-lockfile
+bun run --cwd packages/opencode script/build.ts --single --skip-install
+```
+
 ### 打包为opencode-desktop
 
 * 准备工作
