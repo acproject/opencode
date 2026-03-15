@@ -66,16 +66,7 @@ export const ExportCommand = cmd({
       }
 
       try {
-        const sessionInfo = await Session.get(sessionID!)
-        const messages = await Session.messages({ sessionID: sessionID! })
-
-        const exportData = {
-          info: sessionInfo,
-          messages: messages.map((msg) => ({
-            info: msg.info,
-            parts: msg.parts,
-          })),
-        }
+        const exportData = await Session.exportData(sessionID!)
 
         process.stdout.write(JSON.stringify(exportData, null, 2))
         process.stdout.write(EOL)

@@ -293,6 +293,70 @@ export namespace Session {
     },
   )
 
+  export const ExportData = z
+    .object({
+      info: Info,
+      messages: MessageV2.WithParts.array(),
+    })
+    .meta({
+      ref: "SessionExport",
+    })
+  export type ExportData = z.output<typeof ExportData>
+
+  export const exportData = fn(Identifier.schema("session"), async (sessionID) => {
+    const [info, messages] = await Promise.all([get(sessionID), Session.messages({ sessionID })])
+    return { info, messages } satisfies ExportData
+  })
+
+  export const importData = fn(
+    z.object({
+      data: ExportData,
+    }),
+    async (input) => {
+      const sessionID = input.data.info.id
+      const project = Instance.project
+
+      const existed = await Storage.read<Info>(["session", project.id, sessionID])
+        .then(() => true)
+        .catch(() => false)
+
+      const info: Info = {
+        ...input.data.info,
+        projectID: project.id,
+        directory: Instance.directory,
+        share: undefined,
+        revert: undefined,
+        time: {
+          ...input.data.info.time,
+          updated: Date.now(),
+        },
+      }
+
+      await Storage.write(["session", project.id, sessionID], info)
+      if (!existed) {
+        Bus.publish(Event.Created, { info })
+      }
+      Bus.publish(Event.Updated, { info })
+
+      for (const msg of input.data.messages) {
+        const messageInfo: MessageV2.Info = {
+          ...msg.info,
+          sessionID,
+        }
+        await updateMessage(messageInfo)
+        for (const part of msg.parts) {
+          await updatePart({
+            ...part,
+            sessionID,
+            messageID: messageInfo.id,
+          })
+        }
+      }
+
+      return info
+    },
+  )
+
   export async function* list() {
     const project = Instance.project
     for (const item of await Storage.list(["session", project.id])) {
