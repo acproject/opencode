@@ -5,7 +5,7 @@ import { RouteProvider, useRoute } from "@tui/context/route"
 import { Switch, Match, createEffect, untrack, ErrorBoundary, createSignal, onMount, batch, Show, on } from "solid-js"
 import { Installation } from "@/installation"
 import { Flag } from "@/flag/flag"
-import { DialogProvider, useDialog } from "@tui/ui/dialog"
+import { DialogProvider, useDialog, type DialogContext } from "@tui/ui/dialog"
 import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
 import { SyncProvider, useSync } from "@tui/context/sync"
@@ -32,6 +32,9 @@ import { Session as SessionApi } from "@/session"
 import { TuiEvent } from "./event"
 import { KVProvider, useKV } from "./context/kv"
 import { Provider } from "@/provider/provider"
+import { Skill } from "@/skill"
+import { ConfigMarkdown } from "@/config/markdown"
+import { Instance } from "@/project/instance"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
 import open from "open"
 import { writeHeapSnapshot } from "v8"
@@ -320,6 +323,82 @@ function App() {
 
   const connected = useConnected()
   command.register(() => [
+    {
+      title: "Insert skill",
+      value: "skill.list",
+      category: "Prompt",
+      onSelect: async (dialog: DialogContext) => {
+        const directory = sync.data.path.directory || process.cwd()
+        const skills = await Instance.provide({
+          directory,
+          fn: () => Skill.all(),
+        })
+        const options = skills
+          .toSorted((a, b) => a.name.localeCompare(b.name))
+          .map((skill) => ({
+            title: skill.name,
+            value: skill.name,
+            description: skill.description,
+            category: skill.name.includes("/") ? skill.name.split("/")[0] : "Skills",
+            onSelect: async (dialog: DialogContext) => {
+              const result = await Instance.provide({
+                directory,
+                fn: async () => {
+                  const s = await Skill.get(skill.name)
+                  if (!s) return { found: false as const, content: "" }
+                  const parsed = await ConfigMarkdown.parse(s.location)
+                  return { found: true as const, content: parsed.content.trim() }
+                },
+              })
+              if (!result.found) {
+                toast.show({
+                  variant: "error",
+                  message: `Skill not found: ${skill.name}`,
+                  duration: 3000,
+                })
+                dialog.clear()
+                return
+              }
+              if (!result.content) {
+                toast.show({
+                  variant: "warning",
+                  message: `Skill is empty: ${skill.name}`,
+                  duration: 3000,
+                })
+                dialog.clear()
+                return
+              }
+
+              const prompt = promptRef.current
+              if (!prompt) {
+                toast.show({
+                  variant: "warning",
+                  message: "No prompt input available",
+                  duration: 3000,
+                })
+                dialog.clear()
+                return
+              }
+
+              const current = prompt.current
+              const nextInput = current.input ? `${current.input}\n\n${result.content}` : result.content
+              prompt.set({
+                input: nextInput,
+                parts: current.parts,
+              })
+              prompt.focus()
+              dialog.clear()
+              toast.show({
+                variant: "success",
+                message: `Inserted skill: ${skill.name}`,
+                duration: 2500,
+              })
+            },
+          }))
+
+        dialog.replace(() => <DialogSelect title="Skills" placeholder="Search skills" options={options} />)
+      },
+    },
     {
       title: "Switch session",
       value: "session.list",

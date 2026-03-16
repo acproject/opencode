@@ -38,6 +38,7 @@ export namespace Skill {
 
   const OPENCODE_SKILL_GLOB = new Bun.Glob("{skill,skills}/**/SKILL.md")
   const CLAUDE_SKILL_GLOB = new Bun.Glob("skills/**/SKILL.md")
+  const TRAE_SKILL_GLOB = new Bun.Glob("skills/**/SKILL.md")
 
   export const state = Instance.state(async () => {
     const skills: Record<string, Info> = {}
@@ -99,6 +100,39 @@ export namespace Skill {
         for (const match of matches) {
           await addSkill(match)
         }
+      }
+    }
+
+    // Scan .trae/skills/ directories (project-level)
+    const traeDirs = await Array.fromAsync(
+      Filesystem.up({
+        targets: [".trae"],
+        start: Instance.directory,
+        stop: Instance.worktree,
+      }),
+    )
+    // Also include global ~/.trae/skills/
+    const globalTrae = `${Global.Path.home}/.trae`
+    if (await exists(globalTrae)) {
+      traeDirs.push(globalTrae)
+    }
+
+    for (const dir of traeDirs) {
+      const matches = await Array.fromAsync(
+        TRAE_SKILL_GLOB.scan({
+          cwd: dir,
+          absolute: true,
+          onlyFiles: true,
+          followSymlinks: true,
+          dot: true,
+        }),
+      ).catch((error) => {
+        log.error("failed .trae directory scan for skills", { dir, error })
+        return []
+      })
+
+      for (const match of matches) {
+        await addSkill(match)
       }
     }
 
