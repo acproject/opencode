@@ -196,6 +196,8 @@ export const Terminal = (props: TerminalProps) => {
         }
         fitAddon.fit()
       })
+    } else {
+      fitAddon.fit()
     }
 
     fitAddon.observeResize()
@@ -219,14 +221,6 @@ export const Terminal = (props: TerminalProps) => {
         socket.send(data)
       }
     })
-    t.onKey((key) => {
-      if (key.key == "Enter") {
-        props.onSubmit?.()
-      }
-    })
-    // t.onScroll((ydisp) => {
-    // console.log("Scroll position:", ydisp)
-    // })
     socket.addEventListener("open", () => {
       console.log("WebSocket connected")
       sdk.client.pty
