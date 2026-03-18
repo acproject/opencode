@@ -24,7 +24,6 @@ target
 # Local dev files
 opencode-dev
 logs/
-packages/
 
 .bun-cache
 opencode-test-*
