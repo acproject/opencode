@@ -484,6 +484,53 @@ function App() {
       },
     },
     {
+      title: "Open file in editor",
+      value: "file.open",
+      category: "File",
+      onSelect: async () => {
+        dialog.clear()
+        const queryRaw = await DialogPrompt.show(dialog, "Open file", {
+          placeholder: "Search file path (e.g. src/index.ts)",
+        })
+        const query = queryRaw?.trim() ?? ""
+        if (!query) {
+          dialog.clear()
+          return
+        }
+
+        const files = await sdk.client.find
+          .files({ query, type: "file", limit: 200 })
+          .then((x) => x.data ?? [])
+          .catch(() => [])
+
+        if (files.length === 0) {
+          toast.show({ variant: "warning", message: "No matching files found", duration: 2500 })
+          dialog.clear()
+          return
+        }
+
+        const options = files.map((p) => ({
+          title: p,
+          value: p,
+          onSelect: async (dialog: DialogContext) => {
+            const locationRaw = await DialogPrompt.show(dialog, "Line:Column (optional)", {
+              placeholder: "e.g. 12:3",
+            })
+            if (locationRaw === null) return
+            const location = locationRaw.trim()
+            const [lineRaw, columnRaw] = location ? location.split(":") : []
+            const line = lineRaw ? Number(lineRaw) : undefined
+            const column = columnRaw ? Number(columnRaw) : undefined
+            const filepath = path.join(process.cwd(), p)
+            await Editor.openFile({ filepath, renderer, line, column })
+            dialog.clear()
+          },
+        }))
+
+        dialog.replace(() => <DialogSelect title="Select file" placeholder="Search results" options={options} />)
+      },
+    },
+    {
       title: "Create custom Agent",
       value: "agent.create",
       category: "Agent",
