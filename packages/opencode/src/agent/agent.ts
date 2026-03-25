@@ -155,6 +155,29 @@ export namespace Agent {
         mode: "subagent",
         native: true,
       },
+      completion: {
+        name: "completion",
+        description: "Code completion agent for editor suggestions.",
+        mode: "subagent",
+        native: true,
+        hidden: true,
+        temperature: 0.1,
+        topP: 1,
+        permission: PermissionNext.merge(
+          defaults,
+          PermissionNext.fromConfig({
+            "*": "deny",
+          }),
+          user,
+        ),
+        prompt: [
+          "You are a code completion engine for an editor.",
+          "Return ONLY valid JSON matching the required schema.",
+          "Do not include markdown, backticks, or explanations.",
+          "Prefer minimal, correct completions that fit the surrounding code style.",
+        ].join("\n"),
+        options: {},
+      },
       compaction: {
         name: "compaction",
         mode: "primary",

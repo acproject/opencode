@@ -53,6 +53,7 @@ import { QuestionRoute } from "./question"
 import { Installation } from "@/installation"
 import { MDNS } from "./mdns"
 import { Worktree } from "../worktree"
+import { generateObject } from "ai"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -2588,6 +2589,132 @@ export namespace Server {
             const path = c.req.valid("query").path
             const content = await File.read(path)
             return c.json(content)
+          },
+        )
+        .put(
+          "/file/content",
+          describeRoute({
+            summary: "Write file",
+            description: "Write the content of a specified file.",
+            operationId: "file.write",
+            responses: {
+              200: {
+                description: "File updated",
+                content: {
+                  "application/json": {
+                    schema: resolver(z.boolean()),
+                  },
+                },
+              },
+              ...errors(400),
+            },
+          }),
+          validator(
+            "json",
+            z.object({
+              path: z.string(),
+              content: z.string(),
+            }),
+          ),
+          async (c) => {
+            const body = c.req.valid("json")
+            await File.write(body.path, body.content)
+            return c.json(true)
+          },
+        )
+        .post(
+          "/experimental/editor/completion",
+          describeRoute({
+            summary: "Editor completion (experimental)",
+            description: "Generate inline code completion suggestions for Monaco editor.",
+            operationId: "experimental.editor.completion",
+            responses: {
+              200: {
+                description: "Completion items",
+                content: {
+                  "application/json": {
+                    schema: resolver(
+                      z.object({
+                        items: z.array(
+                          z.object({
+                            label: z.string(),
+                            insertText: z.string(),
+                          }),
+                        ),
+                      }),
+                    ),
+                  },
+                },
+              },
+              ...errors(400),
+            },
+          }),
+          validator(
+            "json",
+            z.object({
+              path: z.string(),
+              language: z.string(),
+              before: z.string(),
+              after: z.string(),
+              line: z.number().int().positive(),
+              column: z.number().int().positive(),
+              maxItems: z.number().int().positive().max(20).optional(),
+            }),
+          ),
+          async (c) => {
+            const body = c.req.valid("json")
+            const completionAgent = await Agent.get("completion")
+            const base = await Provider.defaultModel()
+            const small = base ? await Provider.getSmallModel(base.providerID) : undefined
+            const model = completionAgent?.model
+              ? await Provider.getModel(completionAgent.model.providerID, completionAgent.model.modelID)
+              : small ?? (base ? await Provider.getModel(base.providerID, base.modelID) : undefined)
+            if (!model) return c.json({ items: [] })
+
+            const languageModel = await Provider.getLanguage(model)
+            const maxItems = body.maxItems ?? 5
+
+            const result = await generateObject({
+              model: languageModel,
+              schema: z.object({
+                items: z
+                  .array(
+                    z.object({
+                      label: z.string(),
+                      insertText: z.string(),
+                    }),
+                  )
+                  .max(20),
+              }),
+              temperature: completionAgent?.temperature ?? 0.1,
+              prompt: [
+                completionAgent?.prompt ?? "You are a code completion engine for an editor.",
+                `Return up to ${maxItems} completion items as JSON.`,
+                "Each item:",
+                "- label: short human-readable label",
+                "- insertText: text to insert at the cursor",
+                "Rules:",
+                "- Do not include backticks or markdown.",
+                "- Prefer minimal, correct completions that fit the code style.",
+                "- Do not repeat text that is already immediately before the cursor.",
+                "",
+                `File: ${body.path}`,
+                `Language: ${body.language}`,
+                `Cursor: line ${body.line}, column ${body.column}`,
+                "",
+                "<before>",
+                body.before,
+                "</before>",
+                "",
+                "<after>",
+                body.after,
+                "</after>",
+              ].join("\n"),
+            })
+
+            return c.json({
+              items: (result.object.items ?? []).slice(0, maxItems),
+            })
           },
         )
         .get(

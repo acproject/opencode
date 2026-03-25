@@ -56,6 +56,37 @@ function stripQueryAndHash(input: string) {
   return input
 }
 
+function selectedLinesFromUrl(input: string): SelectedLineRange | null {
+  const hashIndex = input.indexOf("#")
+  const queryIndex = input.indexOf("?")
+
+  const query =
+    queryIndex !== -1 ? input.slice(queryIndex + 1, hashIndex !== -1 ? hashIndex : undefined) : undefined
+  if (query) {
+    const params = new URLSearchParams(query)
+    const startRaw = params.get("start")
+    const endRaw = params.get("end")
+    const start = startRaw ? parseInt(startRaw, 10) : undefined
+    const end = endRaw ? parseInt(endRaw, 10) : undefined
+    if (start !== undefined && !Number.isNaN(start)) {
+      const resolvedEnd = end !== undefined && !Number.isNaN(end) ? end : start
+      return { start, end: resolvedEnd }
+    }
+  }
+
+  const hash = hashIndex !== -1 ? input.slice(hashIndex) : undefined
+  if (hash) {
+    const match = /^#L(\d+)(?:-L?(\d+))?$/i.exec(hash)
+    if (match) {
+      const start = parseInt(match[1]!, 10)
+      const end = match[2] ? parseInt(match[2], 10) : start
+      if (!Number.isNaN(start) && !Number.isNaN(end)) return { start, end }
+    }
+  }
+
+  return null
+}
+
 export function selectionFromLines(range: SelectedLineRange): FileSelection {
   const startLine = Math.min(range.start, range.end)
   const endLine = Math.max(range.start, range.end)
@@ -215,7 +246,9 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
     }
 
     function tab(input: string) {
+      const selectedLines = selectedLinesFromUrl(input)
       const path = normalize(input)
+      if (selectedLines) view().setSelectedLines(path, selectedLines)
       return `file://${path}`
     }
 

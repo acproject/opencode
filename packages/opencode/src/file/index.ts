@@ -1,4 +1,5 @@
 import { BusEvent } from "@/bus/bus-event"
+import { Bus } from "@/bus"
 import z from "zod"
 import { $ } from "bun"
 import type { BunFile } from "bun"
@@ -12,6 +13,8 @@ import { Instance } from "../project/instance"
 import { Ripgrep } from "./ripgrep"
 import fuzzysort from "fuzzysort"
 import { Global } from "../global"
+import { FileWatcher } from "./watcher"
+import { FileTime } from "./time"
 
 export namespace File {
   const log = Log.create({ service: "file" })
@@ -317,6 +320,26 @@ export namespace File {
       }
     }
     return { type: "text", content }
+  }
+
+  export async function write(file: string, content: string) {
+    using _ = log.time("write", { file })
+    const full = path.join(Instance.directory, file)
+
+    if (!Filesystem.contains(Instance.directory, full)) {
+      throw new Error(`Access denied: path escapes project directory`)
+    }
+
+    await FileTime.withLock(full, async () => {
+      const dir = path.dirname(full)
+      if (dir !== "/" && dir !== ".") {
+        await fs.promises.mkdir(dir, { recursive: true })
+      }
+      await fs.promises.writeFile(full, content, "utf-8")
+    })
+
+    await Bus.publish(Event.Edited, { file: full })
+    await Bus.publish(FileWatcher.Event.Updated, { file: full, event: "change" })
   }
 
   export async function list(dir?: string) {

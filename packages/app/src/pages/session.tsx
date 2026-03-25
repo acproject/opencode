@@ -1,7 +1,6 @@
 import { For, onCleanup, onMount, Show, Match, Switch, createMemo, createEffect, on } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
-import { Dynamic } from "solid-js/web"
 import { useLocal } from "@/context/local"
 import { selectionFromLines, useFile, type SelectedLineRange } from "@/context/file"
 import { createStore } from "solid-js/store"
@@ -14,7 +13,6 @@ import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Tabs } from "@opencode-ai/ui/tabs"
-import { useCodeComponent } from "@opencode-ai/ui/context/code"
 import { SessionTurn } from "@opencode-ai/ui/session-turn"
 import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { SessionReview } from "@opencode-ai/ui/session-review"
@@ -52,6 +50,7 @@ import {
 import { usePlatform } from "@/context/platform"
 import { navMark, navParams } from "@/utils/perf"
 import { same } from "@/utils/same"
+import { MonacoFileEditor } from "@/components/monaco-file-editor"
 
 type DiffStyle = "unified" | "split"
 
@@ -158,7 +157,6 @@ export default function Page() {
   const sync = useSync()
   const terminal = useTerminal()
   const dialog = useDialog()
-  const codeComponent = useCodeComponent()
   const command = useCommand()
   const platform = usePlatform()
   const params = useParams()
@@ -1529,23 +1527,16 @@ export default function Page() {
                             </Match>
                             <Match when={state()?.loaded && isSvg()}>
                               <div class="flex flex-col gap-4 px-6 py-4">
-                                <Dynamic
-                                  component={codeComponent}
-                                  file={{
-                                    name: path() ?? "",
-                                    contents: svgContent() ?? "",
-                                    cacheKey: cacheKey(),
-                                  }}
-                                  enableLineSelection
-                                  selectedLines={selectedLines()}
-                                  onLineSelected={(range: SelectedLineRange | null) => {
-                                    const p = path()
-                                    if (!p) return
-                                    file.setSelectedLines(p, range)
-                                  }}
-                                  overflow="scroll"
-                                  class="select-text"
-                                />
+                                <Show when={path()}>
+                                  {(p) => (
+                                    <MonacoFileEditor
+                                      path={p()}
+                                      contents={svgContent() ?? ""}
+                                      cacheKey={cacheKey()}
+                                      class="w-full h-[70vh]"
+                                    />
+                                  )}
+                                </Show>
                                 <Show when={svgPreviewUrl()}>
                                   <div class="flex justify-center pb-40">
                                     <img src={svgPreviewUrl()} alt={path()} class="max-w-full max-h-96" />
@@ -1554,23 +1545,23 @@ export default function Page() {
                               </div>
                             </Match>
                             <Match when={state()?.loaded}>
-                              <Dynamic
-                                component={codeComponent}
-                                file={{
-                                  name: path() ?? "",
-                                  contents: contents(),
-                                  cacheKey: cacheKey(),
-                                }}
-                                enableLineSelection
-                                selectedLines={selectedLines()}
-                                onLineSelected={(range: SelectedLineRange | null) => {
-                                  const p = path()
-                                  if (!p) return
-                                  file.setSelectedLines(p, range)
-                                }}
-                                overflow="scroll"
-                                class="select-text pb-40"
-                              />
+                              <Switch>
+                                <Match when={state()?.content?.encoding === "base64"}>
+                                  <div class="px-6 py-4 pb-40 text-text-weak">Binary file (base64). Editing is not supported.</div>
+                                </Match>
+                                <Match when={path()}>
+                                  {(p) => (
+                                    <div class="px-6 py-4 pb-40">
+                                      <MonacoFileEditor
+                                        path={p()}
+                                        contents={contents()}
+                                        cacheKey={cacheKey()}
+                                        class="w-full h-[70vh]"
+                                      />
+                                    </div>
+                                  )}
+                                </Match>
+                              </Switch>
                             </Match>
                             <Match when={state()?.loading}>
                               <div class="px-6 py-4 text-text-weak">Loading...</div>
