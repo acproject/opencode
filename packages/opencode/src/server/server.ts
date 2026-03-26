@@ -2659,6 +2659,7 @@ export namespace Server {
               line: z.number().int().positive(),
               column: z.number().int().positive(),
               maxItems: z.number().int().positive().max(20).optional(),
+              model: z.string().optional(),
             }),
           ),
           async (c) => {
@@ -2666,9 +2667,18 @@ export namespace Server {
             const completionAgent = await Agent.get("completion")
             const base = await Provider.defaultModel()
             const small = base ? await Provider.getSmallModel(base.providerID) : undefined
-            const model = completionAgent?.model
-              ? await Provider.getModel(completionAgent.model.providerID, completionAgent.model.modelID)
-              : small ?? (base ? await Provider.getModel(base.providerID, base.modelID) : undefined)
+            const model = await (async () => {
+              if (body.model) {
+                const parsed = Provider.parseModel(body.model)
+                return await Provider.getModel(parsed.providerID, parsed.modelID)
+              }
+              if (completionAgent?.model) {
+                return await Provider.getModel(completionAgent.model.providerID, completionAgent.model.modelID)
+              }
+              if (small) return small
+              if (base) return await Provider.getModel(base.providerID, base.modelID)
+              return undefined
+            })()
             if (!model) return c.json({ items: [] })
 
             const languageModel = await Provider.getLanguage(model)

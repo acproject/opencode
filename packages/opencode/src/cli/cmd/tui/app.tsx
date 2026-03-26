@@ -1,6 +1,6 @@
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Clipboard } from "@tui/util/clipboard"
-import { TextAttributes } from "@opentui/core"
+import { TextAttributes, type TextareaRenderable, type KeyEvent } from "@opentui/core"
 import { RouteProvider, useRoute } from "@tui/context/route"
 import { Switch, Match, createEffect, untrack, ErrorBoundary, createSignal, onMount, batch, Show, on } from "solid-js"
 import { Installation } from "@/installation"
@@ -44,6 +44,218 @@ import { DialogSelect } from "@tui/ui/dialog-select"
 import fs from "fs/promises"
 import path from "path"
 import { Editor } from "@tui/util/editor"
+import { useTextareaKeybindings } from "./component/textarea-keybindings"
+
+function encodeDirectory(directory: string) {
+  const isNonASCII = /[^\x00-\x7F]/.test(directory)
+  return isNonASCII ? encodeURIComponent(directory) : directory
+}
+
+function languageFromPath(p: string) {
+  const ext = path.extname(p).toLowerCase()
+  if (!ext) return "text"
+  return ext.slice(1)
+}
+
+function insertAt(input: string, offset: number, insertText: string) {
+  const clamped = Math.max(0, Math.min(input.length, offset))
+  return input.slice(0, clamped) + insertText + input.slice(clamped)
+}
+
+function DialogFileEditor(props: {
+  filepath: string
+  initialContent?: string
+  initialCursorOffset?: number
+}) {
+  const dialog = useDialog()
+  const renderer = useRenderer()
+  const sdk = useSDK()
+  const sync = useSync()
+  const toast = useToast()
+  const kv = useKV()
+  const { theme } = useTheme()
+  const textareaKeybindings = useTextareaKeybindings()
+
+  let textarea!: TextareaRenderable
+  const [loaded, setLoaded] = createSignal(false)
+
+  const load = async () => {
+    if (props.initialContent !== undefined) {
+      textarea.setText(props.initialContent)
+      textarea.cursorOffset = props.initialCursorOffset ?? 0
+      setLoaded(true)
+      return
+    }
+
+    const result = await sdk.client.file.read({ path: props.filepath })
+    if (result.error || !result.data) {
+      toast.show({ variant: "error", message: `Failed to read file: ${props.filepath}`, duration: 3000 })
+      dialog.clear()
+      return
+    }
+    textarea.setText(result.data.content ?? "")
+    textarea.cursorOffset = props.initialCursorOffset ?? 0
+    setLoaded(true)
+  }
+
+  const save = async () => {
+    if (!loaded()) return
+    const directory = sync.data.path.directory || process.cwd()
+    const url = sdk.url.replace(/\/+$/, "") + "/file/content"
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "x-opencode-directory": encodeDirectory(directory),
+      },
+      body: JSON.stringify({ path: props.filepath, content: textarea.plainText }),
+    }).catch(() => undefined)
+
+    if (!res || !res.ok) {
+      toast.show({ variant: "error", message: `Save failed: ${props.filepath}`, duration: 3000 })
+      return
+    }
+
+    toast.show({ variant: "success", message: `Saved: ${props.filepath}`, duration: 2500 })
+  }
+
+  const requestCompletion = async () => {
+    if (!loaded()) return
+
+    const directory = sync.data.path.directory || process.cwd()
+    const url = sdk.url.replace(/\/+$/, "") + "/experimental/editor/completion"
+    const cursorOffset = textarea.cursorOffset
+    const content = textarea.plainText
+
+    const before = content.slice(Math.max(0, cursorOffset - 8000), cursorOffset)
+    const after = content.slice(cursorOffset, Math.min(content.length, cursorOffset + 2000))
+    const cursor = textarea.logicalCursor
+    const completionModel = String(kv.get("completion_model", "") ?? "").trim()
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-opencode-directory": encodeDirectory(directory),
+      },
+      body: JSON.stringify({
+        path: props.filepath,
+        language: languageFromPath(props.filepath),
+        before,
+        after,
+        line: cursor.row + 1,
+        column: cursor.col + 1,
+        maxItems: 8,
+        model: completionModel ? completionModel : undefined,
+      }),
+    }).catch(() => undefined)
+
+    if (!res || !res.ok) {
+      toast.show({ variant: "warning", message: "No completion available", duration: 2000 })
+      return
+    }
+
+    const data = (await res.json().catch(() => ({ items: [] }))) as { items?: { label: string; insertText: string }[] }
+    const items = Array.isArray(data.items) ? data.items : []
+    if (items.length === 0) {
+      toast.show({ variant: "info", message: "No suggestions", duration: 1500 })
+      return
+    }
+
+    dialog.replace(() => (
+      <DialogSelect
+        title="Completion"
+        placeholder="Search suggestions"
+        options={items.map((item) => ({
+          title: item.label,
+          value: item.insertText,
+          description: item.insertText.length > 80 ? item.insertText.slice(0, 80) + "…" : item.insertText,
+          onSelect: () => {
+            const next = insertAt(content, cursorOffset, item.insertText)
+            const nextOffset = cursorOffset + item.insertText.length
+            dialog.replace(() => (
+              <DialogFileEditor filepath={props.filepath} initialContent={next} initialCursorOffset={nextOffset} />
+            ))
+          },
+        }))}
+      />
+    ))
+  }
+
+  const onKeyDown = async (e: KeyEvent) => {
+    if (e.name === "escape") {
+      e.preventDefault()
+      dialog.clear()
+      return
+    }
+
+    if ((e.name === "s" && (e.ctrl || e.meta || e.super)) || (e.name === "S" && (e.ctrl || e.meta || e.super))) {
+      e.preventDefault()
+      await save()
+      return
+    }
+
+    if ((e.name === "space" || e.sequence === " ") && (e.ctrl || e.meta || e.super)) {
+      e.preventDefault()
+      await requestCompletion()
+      return
+    }
+
+    if (
+      (e.name === "return" && (e.shift || e.meta || e.super)) ||
+      (e.name === "j" && e.ctrl) ||
+      e.name === "\n" ||
+      (e.sequence === "\n" && e.ctrl)
+    ) {
+      e.preventDefault()
+      textarea.insertText("\n")
+      setTimeout(() => {
+        textarea.getLayoutNode().markDirty()
+        renderer.requestRender()
+      }, 0)
+      return
+    }
+  }
+
+  onMount(async () => {
+    dialog.setSize("large")
+    setTimeout(() => {
+      renderer.currentFocusedRenderable?.blur()
+      textarea.focus()
+    }, 1)
+    await load()
+  })
+
+  return (
+    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text attributes={TextAttributes.BOLD} fg={theme.text}>
+          {props.filepath}
+        </text>
+        <text fg={theme.textMuted}>esc</text>
+      </box>
+      <textarea
+        ref={(val: TextareaRenderable) => (textarea = val)}
+        placeholder="Loading..."
+        minHeight={12}
+        maxHeight={28}
+        keyBindings={textareaKeybindings()}
+        onKeyDown={onKeyDown}
+        textColor={theme.text}
+        focusedTextColor={theme.text}
+        cursorColor={theme.text}
+      />
+      <box flexDirection="row" gap={2}>
+        <text fg={theme.text}>
+          ctrl+s <span style={{ fg: theme.textMuted }}>save</span>
+        </text>
+        <text fg={theme.text}>
+          ctrl+space <span style={{ fg: theme.textMuted }}>complete</span>
+        </text>
+      </box>
+    </box>
+  )
+}
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -437,6 +649,43 @@ function App() {
       },
     },
     {
+      title: "Switch completion model",
+      value: "completion.model",
+      category: "Agent",
+      onSelect: (dialog: DialogContext) => {
+        const current = String(kv.get("completion_model", "") ?? "")
+        const options = [
+          {
+            title: "Auto (small_model)",
+            value: "",
+            description: current ? `Current: ${current}` : "Current: Auto",
+            onSelect: () => {
+              kv.set("completion_model", "")
+              toast.show({ variant: "success", message: "Completion model: Auto", duration: 2000 })
+              dialog.clear()
+            },
+          },
+          ...sync.data.provider.flatMap((provider) =>
+            Object.values(provider.models).map((model) => {
+              const value = `${provider.id}/${model.id}`
+              return {
+                title: model.name ?? model.id,
+                value,
+                category: provider.name ?? provider.id,
+                description: value === current ? "(Current)" : undefined,
+                onSelect: () => {
+                  kv.set("completion_model", value)
+                  toast.show({ variant: "success", message: `Completion model: ${value}`, duration: 2000 })
+                  dialog.clear()
+                },
+              }
+            }),
+          ),
+        ]
+        dialog.replace(() => <DialogSelect title="Completion model" placeholder="Search models" options={options} />)
+      },
+    },
+    {
       title: "Model cycle",
       disabled: true,
       value: "model.cycle_recent",
@@ -528,6 +777,47 @@ function App() {
         }))
 
         dialog.replace(() => <DialogSelect title="Select file" placeholder="Search results" options={options} />)
+      },
+    },
+    {
+      title: "Edit file in TUI",
+      value: "file.edit",
+      category: "File",
+      onSelect: async () => {
+        dialog.clear()
+        const queryRaw = await DialogPrompt.show(dialog, "Edit file", {
+          placeholder: "Search file path (e.g. src/index.ts)",
+        })
+        const query = queryRaw?.trim() ?? ""
+        if (!query) {
+          dialog.clear()
+          return
+        }
+
+        const files = await sdk.client.find
+          .files({ query, type: "file", limit: 200 })
+          .then((x) => x.data ?? [])
+          .catch(() => [])
+
+        if (files.length === 0) {
+          toast.show({ variant: "warning", message: "No matching files found", duration: 2500 })
+          dialog.clear()
+          return
+        }
+
+        dialog.replace(() => (
+          <DialogSelect
+            title="Select file"
+            placeholder="Search results"
+            options={files.map((p) => ({
+              title: p,
+              value: p,
+              onSelect: (dialog: DialogContext) => {
+                dialog.replace(() => <DialogFileEditor filepath={p} />)
+              },
+            }))}
+          />
+        ))
       },
     },
     {
