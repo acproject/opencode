@@ -1061,7 +1061,7 @@ export namespace Provider {
         (cfg.provider?.["owiseman"]?.options?.promptToolCall === true ? true : undefined)
       const toolcallEnabled = toolcallOption ?? true
 
-      const templateModel = input.models["nemotron-3-nano:30b"] ?? Object.values(input.models)[0]
+      const templateModel = input.models["Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf"] ?? Object.values(input.models)[0]
       const templateCapabilities = {
         ...(templateModel?.capabilities ?? {
           temperature: true,
@@ -1391,15 +1391,15 @@ export namespace Provider {
         env: ["OWISEMAN_API_KEY"],
         options: {},
         models: {
-          "nemotron-3-nano:30b": {
-            id: "nemotron-3-nano:30b",
+          "Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf": {
+            id: "Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
             providerID: "owiseman",
             api: {
-              id: "nemotron-3-nano:30b",
+              id: "Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
               url: "https://www.owiseman.com",
               npm: "@ai-sdk/openai-compatible",
             },
-            name: "nemotron-3-nano:30b",
+            name: "Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
             family: "ollama",
             capabilities: {
               temperature: true,
